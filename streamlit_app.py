@@ -39,6 +39,16 @@ body {
     border-radius: 16px;
     box-shadow: 0 8px 16px rgba(20, 63, 107, 0.08);
     border: 1px solid #e6ebf3;
+    color: #143f6b;
+}
+.metric-card h2 {
+    color: #0d2e50;
+    margin: 4px 0 0;
+}
+.metric-card p {
+    color: #5b6b80;
+    margin: 0 0 4px;
+    font-size: 0.95rem;
 }
 .badge {
     border-radius: 999px;
@@ -79,6 +89,8 @@ th, td {
     padding: 10px 12px;
     border-bottom: 1px solid #eef2f7;
     text-align: center;
+    color: #1f2a37;
+    font-size: 0.92rem;
 }
 th {
     background: #f0f4fb;

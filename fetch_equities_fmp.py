@@ -60,6 +60,10 @@ STOCKS: List[Dict[str, str]] = [
     {"name_en": "Alibaba Group", "name_cn": "阿里巴巴", "symbol": "9988.HK", "provider": "yfinance", "market": "HK"},
     {"name_en": "Baidu", "name_cn": "百度", "symbol": "9888.HK", "provider": "yfinance", "market": "HK"},
     {"name_en": "NetEase", "name_cn": "网易", "symbol": "9999.HK", "provider": "yfinance", "market": "HK"},
+    {"name_en": "Meituan", "name_cn": "美团", "symbol": "3690.HK", "provider": "yfinance", "market": "HK"},
+    {"name_en": "Trip.com Group (HK)", "name_cn": "携程 (港股)", "symbol": "9961.HK", "provider": "yfinance", "market": "HK"},
+    {"name_en": "Trip.com Group", "name_cn": "携程 (美股)", "symbol": "TCOM", "provider": "fmp", "market": "US"},
+    {"name_en": "Reddit", "name_cn": "Reddit", "symbol": "RDDT", "provider": "fmp", "market": "US"},
     {"name_en": "Perfect World", "name_cn": "完美世界", "symbol": "002624.SZ", "provider": "yfinance", "market": "CN"},
 ]
 
