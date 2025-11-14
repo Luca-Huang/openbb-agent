@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,6 +28,12 @@ class EquitySummary:
     best_close_date: date
     end_pe: Optional[float]
     end_close_percentile: Optional[float]
+    pe_percentile_5y: Optional[float]
+    ps_percentile_5y: Optional[float]
+    peg_ratio: Optional[float]
+    fcf_yield: Optional[float]
+    entry_conditions_met: int
+    entry_recommendation: str
 
     def as_pct(self) -> float:
         return self.pct_change * 100
@@ -40,7 +46,7 @@ TICKERS: tuple[Dict[str, str], ...] = (
 )
 
 OUTPUT_DIR = Path("openbb_outputs")
-LOOKBACK_DAYS = 90
+LOOKBACK_DAYS = 730
 PERCENTILE_LOOKBACK_DAYS = 5 * 365
 
 
@@ -52,6 +58,7 @@ def fetch_history(
     fallback_provider: str = "yfinance",
 ) -> pd.DataFrame:
     """Fetch daily price history via OpenBB and return as DataFrame."""
+    last_error: Exception | None = None
     for current_provider in (provider, fallback_provider):
         try:
             response = obb.equity.price.historical(
@@ -100,9 +107,11 @@ def add_close_percentile(
     return enriched
 
 
-def add_daily_pe(symbol: str, df: pd.DataFrame) -> pd.DataFrame:
+def add_daily_pe(
+    symbol: str, df: pd.DataFrame, ticker: Optional[yf.Ticker] = None
+) -> pd.DataFrame:
     """Attach trailing EPS and daily PE using Yahoo Finance fundamentals."""
-    ticker = yf.Ticker(symbol)
+    ticker = ticker or yf.Ticker(symbol)
     fundamentals = ticker.quarterly_financials
     if fundamentals.empty or "Diluted EPS" not in fundamentals.index:
         enriched = df.copy()
@@ -145,7 +154,134 @@ def add_daily_pe(symbol: str, df: pd.DataFrame) -> pd.DataFrame:
     return merged.drop(columns=["eps"]) if "eps" in merged else merged
 
 
-def summarize(name: str, symbol: str, df: pd.DataFrame) -> EquitySummary:
+def percentile_rank(series: pd.Series, value: Optional[float]) -> Optional[float]:
+    """Compute percentile rank of value within series."""
+    if value is None or pd.isna(value):
+        return None
+    clean = series.dropna()
+    if clean.empty:
+        return None
+    rank = (clean <= value).sum() / len(clean)
+    return float(rank)
+
+
+def compute_financial_metrics(ticker: yf.Ticker) -> Dict[str, Optional[float]]:
+    """Collect TTM revenue, FCF, shares, and market cap."""
+    metrics: Dict[str, Optional[float]] = {
+        "ttm_revenue": None,
+        "ttm_fcf": None,
+        "shares": None,
+        "market_cap": None,
+    }
+
+    fast_info = getattr(ticker, "fast_info", {}) or {}
+    info = getattr(ticker, "info", {}) or {}
+
+    shares = fast_info.get("shares") or fast_info.get("outstandingShares")
+    if not shares:
+        shares = info.get("sharesOutstanding")
+    metrics["shares"] = float(shares) if shares else None
+
+    market_cap = fast_info.get("marketCap") or info.get("marketCap")
+    metrics["market_cap"] = float(market_cap) if market_cap else None
+
+    q_fin = ticker.quarterly_financials
+    if "Total Revenue" in q_fin.index:
+        metrics["ttm_revenue"] = float(
+            q_fin.loc["Total Revenue"].dropna().sort_index().tail(4).sum()
+        )
+
+    q_cf = ticker.quarterly_cashflow
+    if "Free Cash Flow" in q_cf.index:
+        metrics["ttm_fcf"] = float(
+            q_cf.loc["Free Cash Flow"].dropna().sort_index().tail(4).sum()
+        )
+    elif (
+        "Operating Cash Flow" in q_cf.index
+        and "Capital Expenditure" in q_cf.index
+    ):
+        ocf = q_cf.loc["Operating Cash Flow"].dropna().sort_index().tail(4)
+        capex = q_cf.loc["Capital Expenditure"].dropna().sort_index().tail(4)
+        if not ocf.empty and not capex.empty:
+            metrics["ttm_fcf"] = float((ocf - capex).sum())
+
+    return metrics
+
+
+def calculate_entry_signals(
+    history: pd.DataFrame,
+    long_history: pd.DataFrame,
+    ticker: yf.Ticker,
+) -> Tuple[dict, pd.DataFrame]:
+    """Evaluate entry conditions and return metrics along with updated history."""
+    latest_row = history.iloc[-1]
+    pe_percentile = None
+    if "pe" in long_history.columns:
+        pe_percentile = percentile_rank(long_history["pe"], latest_row.get("pe"))
+
+    peg_ratio = None
+    if "ttm_eps" in history.columns and pd.notna(latest_row.get("ttm_eps")):
+        trailing_eps = history.dropna(subset=["ttm_eps"])
+        past_eps = trailing_eps[
+            trailing_eps["date"] <= latest_row["date"] - pd.Timedelta(days=365)
+        ]
+        if not past_eps.empty:
+            eps_prev = past_eps.iloc[-1]["ttm_eps"]
+            if eps_prev and eps_prev != 0:
+                growth = (latest_row["ttm_eps"] - eps_prev) / abs(eps_prev)
+                if growth > 0:
+                    peg_ratio = latest_row["pe"] / (growth * 100)
+
+    metrics = compute_financial_metrics(ticker)
+    ps_percentile = None
+    if metrics.get("ttm_revenue") and metrics.get("shares"):
+        sales_per_share = metrics["ttm_revenue"] / metrics["shares"]
+        if sales_per_share and sales_per_share > 0:
+            history = history.copy()
+            history["ps_ratio"] = history["close"] / sales_per_share
+            ps_percentile = percentile_rank(
+                history["ps_ratio"].dropna(), history.iloc[-1]["ps_ratio"]
+            )
+    else:
+        history = history.copy()
+        history["ps_ratio"] = np.nan
+
+    fcf_yield = None
+    if metrics.get("ttm_fcf") and metrics.get("market_cap"):
+        if metrics["market_cap"] > 0:
+            fcf_yield = metrics["ttm_fcf"] / metrics["market_cap"]
+
+    cond_pe = pe_percentile is not None and pe_percentile <= 0.3
+    cond_peg = peg_ratio is not None and peg_ratio <= 1
+    cond_ps = ps_percentile is not None and ps_percentile <= 0.3
+    cond_fcf = fcf_yield is not None and fcf_yield >= 0.04
+
+    met_count = sum([cond_pe, cond_peg, cond_ps, cond_fcf])
+    if met_count == 4:
+        recommendation = "建议入场"
+    elif met_count >= 2:
+        recommendation = "可评估入场"
+    else:
+        recommendation = "暂不建议入场"
+
+    signals = {
+        "pe_percentile_5y": pe_percentile,
+        "ps_percentile_5y": ps_percentile,
+        "peg_ratio": peg_ratio,
+        "fcf_yield": fcf_yield,
+        "entry_conditions_met": met_count,
+        "entry_recommendation": recommendation,
+    }
+
+    return signals, history
+
+
+def summarize(
+    name: str,
+    symbol: str,
+    df: pd.DataFrame,
+    signals: dict,
+) -> EquitySummary:
     """Build a summary row for downstream reporting."""
     start_row = df.iloc[0]
     end_row = df.iloc[-1]
@@ -173,6 +309,12 @@ def summarize(name: str, symbol: str, df: pd.DataFrame) -> EquitySummary:
         best_close_date=pd.to_datetime(best_row["date"]).date(),
         end_pe=end_pe,
         end_close_percentile=percentile,
+        pe_percentile_5y=signals.get("pe_percentile_5y"),
+        ps_percentile_5y=signals.get("ps_percentile_5y"),
+        peg_ratio=signals.get("peg_ratio"),
+        fcf_yield=signals.get("fcf_yield"),
+        entry_conditions_met=signals.get("entry_conditions_met", 0),
+        entry_recommendation=signals.get("entry_recommendation", "数据不足"),
     )
 
 
@@ -192,8 +334,11 @@ def main() -> None:
 
         history = fetch_history(symbol, provider, start, end)
         long_history = fetch_history(symbol, provider, percentile_start, end)
+        ticker = yf.Ticker(symbol)
         history = add_close_percentile(history, long_history)
-        history = add_daily_pe(symbol, history)
+        history = add_daily_pe(symbol, history, ticker=ticker)
+        long_history = add_daily_pe(symbol, long_history, ticker=ticker)
+        signals, history = calculate_entry_signals(history, long_history, ticker)
         history["name"] = name
         combined.append(
             history[
@@ -205,10 +350,11 @@ def main() -> None:
                     "close_percentile",
                     "ttm_eps",
                     "pe",
+                    "ps_ratio",
                 ]
             ].copy()
         )
-        summary_rows.append(summarize(name, symbol, history))
+        summary_rows.append(summarize(name, symbol, history, signals))
 
     combined_df = pd.concat(combined, ignore_index=True)
     combined_path = OUTPUT_DIR / "three_month_close_history.csv"
@@ -222,7 +368,7 @@ def main() -> None:
 
     print("Saved:", combined_path)
     print("Saved:", summary_path)
-    print("\nThree-month performance (% change):")
+    print("\nPerformance overview (% change):")
     pretty = summary_df[
         [
             "name",
@@ -234,6 +380,11 @@ def main() -> None:
             "best_close",
             "end_pe",
             "end_close_percentile",
+            "pe_percentile_5y",
+            "ps_percentile_5y",
+            "peg_ratio",
+            "fcf_yield",
+            "entry_recommendation",
         ]
     ].copy()
     pretty["pct_change"] = pretty["pct_change"].map(lambda v: f"{v:.2f}%")
@@ -241,6 +392,18 @@ def main() -> None:
         lambda v: f"{v:.1f}" if pd.notna(v) else "N/A"
     )
     pretty["end_close_percentile"] = pretty["end_close_percentile"].map(
+        lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "N/A"
+    )
+    pretty["pe_percentile_5y"] = pretty["pe_percentile_5y"].map(
+        lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "N/A"
+    )
+    pretty["ps_percentile_5y"] = pretty["ps_percentile_5y"].map(
+        lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "N/A"
+    )
+    pretty["peg_ratio"] = pretty["peg_ratio"].map(
+        lambda v: f"{v:.2f}" if pd.notna(v) else "N/A"
+    )
+    pretty["fcf_yield"] = pretty["fcf_yield"].map(
         lambda v: f"{v * 100:.1f}%" if pd.notna(v) else "N/A"
     )
     print(pretty.to_string(index=False))
