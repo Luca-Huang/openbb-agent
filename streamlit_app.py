@@ -5,14 +5,16 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 import html
+import json
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-st.set_page_config(page_title="价值锚点仪表盘", layout="wide")
+st.set_page_config(page_title='价值锚点监控', layout='wide')
 
 px.defaults.template = "plotly_white"
 
@@ -26,6 +28,37 @@ THEME_COLORS = [
     "#FF6F91",
     "#6A67CE",
 ]
+COLOR_UP = "#e63946"  # 涨 -> 红色
+COLOR_DOWN = "#2ecc71"  # 跌 -> 绿色
+CATEGORY_MAP = {
+    "NVDA": "AI算力-芯片",
+    "AMD": "AI算力-芯片",
+    "TSM": "AI算力-芯片",
+    "MSFT": "云平台与服务",
+    "AMZN": "云平台与服务",
+    "GOOGL": "云平台与服务",
+    "AVGO": "硬件/网络支持",
+    "MRVL": "硬件/网络支持",
+    "ANET": "硬件/网络支持",
+    "SMCI": "硬件/网络支持",
+    "SNOW": "软件与数据",
+    "MDB": "软件与数据",
+}
+AI_STACK_INFO = [
+    {"layer": "AI算力-芯片", "symbol": "NVDA", "company": "英伟达 (NVDA)", "reason": "GPU 与 CUDA 生态构成唯一标准，大模型训练必备"},
+    {"layer": "AI算力-芯片", "symbol": "AMD", "company": "AMD (AMD)", "reason": "MI300 系列正在获得云厂商订单，提供英伟达之外的选择"},
+    {"layer": "AI算力-芯片", "symbol": "TSM", "company": "台积电 (TSM)", "reason": "先进制程代工霸主，英伟达/AMD 核心芯片由其代工"},
+    {"layer": "云平台与服务", "symbol": "MSFT", "company": "微软 (MSFT)", "reason": "Azure + OpenAI 组合，企业级 AI 基础设施领导者"},
+    {"layer": "云平台与服务", "symbol": "AMZN", "company": "亚马逊 (AMZN)", "reason": "AWS + 自研芯片 + Bedrock，按需租赁算力"},
+    {"layer": "云平台与服务", "symbol": "GOOGL", "company": "谷歌 (GOOGL)", "reason": "TPU + Vertex AI + Gemini，技术栈完整"},
+    {"layer": "硬件/网络支持", "symbol": "AVGO", "company": "博通 (AVGO)", "reason": "ASIC 与高速网络芯片，支撑云厂商定制需求"},
+    {"layer": "硬件/网络支持", "symbol": "MRVL", "company": "迈威尔 (MRVL)", "reason": "数据中心互连芯片，AI 集群高速网络核心"},
+    {"layer": "硬件/网络支持", "symbol": "ANET", "company": "Arista (ANET)", "reason": "高速交换机供应商，AI 数据中心网络必备"},
+    {"layer": "硬件/网络支持", "symbol": "SMCI", "company": "超微电脑 (SMCI)", "reason": "AI 服务器系统集成商，深度绑定英伟达"},
+    {"layer": "软件与数据", "symbol": "SNOW", "company": "Snowflake (SNOW)", "reason": "云原生数据仓库，AI 所需的数据燃料管家"},
+    {"layer": "软件与数据", "symbol": "MDB", "company": "MongoDB (MDB)", "reason": "文档数据库，支撑 AI 应用的非结构化数据"},
+]
+SYMBOL_REASON = {row["symbol"]: row["reason"] for row in AI_STACK_INFO}
 
 CUSTOM_CSS = """
 <style>
@@ -127,6 +160,8 @@ DATA_DIR = Path(__file__).parent / "openbb_outputs"
 HISTORY_PATH = DATA_DIR / "three_month_close_history.csv"
 SUMMARY_PATH = DATA_DIR / "three_month_summary.csv"
 ANALYST_PATH = DATA_DIR / "us_analyst_estimates.csv"
+CRYPTO_DIR = DATA_DIR / "crypto"
+CRYPTO_DASHBOARD_PATH = CRYPTO_DIR / "crypto_support_dashboard.csv"
 
 TIER_BADGE = {
     "黄金坑": "badge-green",
@@ -220,7 +255,7 @@ def load_analyst() -> pd.DataFrame:
     return df
 
 
-def main() -> None:
+def render_equity_dashboard() -> None:
     st.title("OpenBB 三个月表现仪表盘")
     st.caption(
         "数据来源：`openbb_three_months.py` 和 `fetch_us_analyst_estimates.py` 生成的 CSV 文件。"
@@ -239,6 +274,10 @@ def main() -> None:
             - **综合结论**：满足 4 条 → 建议入场；≥2 条 → 可评估入场；否则暂不建议入场。
             """
         )
+
+    with st.expander("AI 产业链速览"):
+        stack_df = pd.DataFrame(AI_STACK_INFO)
+        st.dataframe(stack_df, use_container_width=True)
 
     history = load_history()
     history["date"] = (
@@ -273,6 +312,12 @@ def main() -> None:
         history["market"] = "Unknown"
     if "market" not in summary.columns:
         summary["market"] = "Unknown"
+    summary["theme_category"] = summary["symbol"].map(CATEGORY_MAP).fillna("其他")
+    summary["investment_reason"] = summary["symbol"].map(SYMBOL_REASON).fillna("")
+    if "symbol" in history.columns:
+        history["theme_category"] = history["symbol"].map(CATEGORY_MAP).fillna("其他")
+    else:
+        history["theme_category"] = "Unknown"
     analyst = load_analyst()
 
     market_options = sorted(summary["market"].dropna().unique())
@@ -283,9 +328,69 @@ def main() -> None:
     )
     summary = summary[summary["market"].isin(selected_markets)]
     history = history[history["market"].isin(selected_markets)]
+    category_options = sorted(summary["theme_category"].dropna().unique())
+    selected_categories = st.multiselect(
+        "选择产业链层级",
+        category_options,
+        default=category_options,
+    )
+    if selected_categories:
+        summary = summary[summary["theme_category"].isin(selected_categories)]
+        allow_symbols = summary["symbol"].unique().tolist()
+        if "symbol" in history.columns:
+            history = history[history["symbol"].isin(allow_symbols)]
+
+    search_kw = st.text_input("搜索公司/代码")
+    if search_kw:
+        keyword = search_kw.strip().lower()
+        if keyword:
+            search_cols = [col for col in ["name", "name_cn", "name_en", "symbol"] if col in summary.columns]
+            if search_cols:
+                mask = pd.Series(False, index=summary.index)
+                for col in search_cols:
+                    mask |= summary[col].astype(str).str.lower().str.contains(keyword, na=False)
+                summary = summary[mask]
+                allow_symbols = summary["symbol"].unique().tolist()
+                if "symbol" in history.columns:
+                    history = history[history["symbol"].isin(allow_symbols)]
+
     if summary.empty or history.empty:
-        st.warning("所选市场暂无数据。")
+        st.warning("所选条件暂无数据")
         return
+
+    if "value_score" in summary.columns:
+        summary = summary.sort_values("value_score", ascending=False)
+
+    st.subheader("产业链概览")
+    cat_summary = (
+        summary.groupby("theme_category")
+        .agg(
+            company_count=("symbol", "nunique"),
+            avg_score=("value_score", "mean"),
+            top_score=("value_score", "max"),
+        )
+        .reset_index()
+    )
+    cat_summary["avg_score"] = cat_summary["avg_score"].round(1)
+    cat_summary["top_score"] = cat_summary["top_score"].round(1)
+    st.dataframe(cat_summary.rename(columns={"theme_category": "分类", "company_count": "公司数", "avg_score": "平均得分", "top_score": "最高得分"}), use_container_width=True)
+
+    if category_options:
+        category_tabs = st.tabs(category_options)
+        for cat, tab in zip(category_options, category_tabs):
+            subset_cat = summary[summary["theme_category"] == cat]
+            if subset_cat.empty:
+                tab.info("暂无数据")
+                continue
+            avg_cat = subset_cat["value_score"].mean()
+            metric_text = f"{avg_cat:.1f}" if not np.isnan(avg_cat) else "N/A"
+            tab.metric("平均得分", metric_text, help="分类内 Value Score 均值")
+            display_cols = [col for col in ["name", "symbol", "value_score", "value_score_tier", "investment_reason"] if col in subset_cat.columns]
+            tab.dataframe(subset_cat[display_cols], use_container_width=True)
+    else:
+        st.info("当前筛选暂无分类数据")
+
+        summary = summary.sort_values("value_score", ascending=False)
 
     # KPI cards
     col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
@@ -337,6 +442,16 @@ def main() -> None:
                 "ps_coverage_years",
             ]
         ].copy()
+
+        signal_kw = st.text_input("搜索入场信号标的", "", key="signal_search")
+        if signal_kw:
+            keyword = signal_kw.strip().lower()
+            if keyword:
+                mask = (
+                    eval_df["name"].astype(str).str.lower().str.contains(keyword, na=False)
+                    | eval_df["symbol"].astype(str).str.lower().str.contains(keyword, na=False)
+                )
+                eval_df = eval_df[mask]
 
         eval_df["pe_condition"] = eval_df["pe_percentile_5y"].apply(
             lambda v: np.nan if pd.isna(v) else v <= 0.3
@@ -543,6 +658,8 @@ def main() -> None:
             labels={"pct_change": "% Change"},
             color_discrete_sequence=THEME_COLORS,
         )
+        pct_colors = [COLOR_UP if val >= 0 else COLOR_DOWN for val in summary_display["pct_change"]]
+        pct_fig.update_traces(marker_color=pct_colors)
         st.plotly_chart(pct_fig, use_container_width=True)
     with cols[1]:
         pe_bar = px.bar(
@@ -606,6 +723,268 @@ def main() -> None:
     st.plotly_chart(revenue_fig, use_container_width=True)
 
     st.dataframe(filtered_analyst.sort_values("date（财年/报告期）"), use_container_width=True)
+
+
+def _load_crypto_dashboard() -> Optional[pd.DataFrame]:
+    if not CRYPTO_DASHBOARD_PATH.exists():
+        st.warning("未找到 `openbb_outputs/crypto/crypto_support_dashboard.csv`，请先运行 `fetch_crypto_supports.py`。")
+        return None
+    df = pd.read_csv(CRYPTO_DASHBOARD_PATH)
+    numeric_cols = [
+        "last_price",
+        "ma50",
+        "ma200",
+        "fib_38_2",
+        "fib_50",
+        "fib_61_8",
+        "rsi14",
+        "mvrv",
+        "lth_cost_basis",
+        "exchange_netflow",
+        "asopr",
+        "funding_rate",
+        "fear_greed",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "rsi_divergence" in df.columns:
+        df["rsi_divergence"] = df["rsi_divergence"].astype(str).str.lower().isin(["true", "1", "yes"])
+    if "retrieved_at" in df.columns:
+        df["retrieved_at"] = pd.to_datetime(df["retrieved_at"], errors="coerce")
+    return df
+
+
+def _format_supports(raw: str | float | None) -> str:
+    if raw is None or (isinstance(raw, float) and np.isnan(raw)):
+        return "暂无数据"
+    return str(raw)
+
+
+def _format_number(value: float, fmt: str = ".2f") -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return format(float(value), fmt)
+
+
+def _format_percent(value: float) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{value:.2f}%"
+
+
+def _colored_percentage(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    color = COLOR_UP if value >= 0 else COLOR_DOWN
+    prefix = "+" if value > 0 else ""
+    return f"<span style='color:{color};font-weight:600'>{prefix}{value:.2f}%</span>"
+
+
+def _format_usd(value: float) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    if abs(value) >= 1_000_000_000:
+        return f"${value/1_000_000_000:.2f}B"
+    if abs(value) >= 1_000_000:
+        return f"${value/1_000_000:.2f}M"
+    if abs(value) >= 1_000:
+        return f"${value/1_000:.2f}K"
+    return f"${value:,.0f}"
+
+
+def render_crypto_dashboard() -> None:
+    st.title("加密货币 - 三维度确认法")
+    st.caption("数据来源：`fetch_crypto_supports.py` 生成的 `openbb_outputs/crypto/` 文件")
+    with st.expander("名词解释"):
+        st.markdown(
+            """
+- **recent_supports / 支撑次数**：最近三次摆动低点及价格；次数越多说明该区间被多次验证。
+- **fib_38_2 / 50 / 61_8**：依据最近 120 天摆动区间计算的斐波那契关键位，常用作反弹目标或支撑。
+- **swing_low / swing_high / swing_range**：当前摆动区间的低点、高点与跨度，刻画波动范围。
+- **pct_change_7d / 30d**：近 7 / 30 日的累积涨跌幅，用于观察短中期动能。
+- **distance_ma50_pct / distance_ma200_pct**：现价相对 50 / 200 日均线的偏离百分比，为负表示跌破均线。
+- **volume_avg_30d**：近 30 日平均成交量，衡量筹码活跃度。
+- **hvn_zones**：Volume Profile 的高成交量节点，每个节点给出价格上下沿与成交量。
+- **fear_greed / funding_rate**：恐惧与贪婪指数、永续合约资金费率，两者共同反映市场情绪。
+            """
+        )
+
+    df = _load_crypto_dashboard()
+    if df is None or df.empty:
+        return
+
+    latest_ts = None
+    if "retrieved_at" in df.columns:
+        ts_series = df["retrieved_at"].dropna()
+        if not ts_series.empty:
+            latest_ts = ts_series.max()
+
+    numeric_distance = pd.to_numeric(df.get("distance_ma200_pct"), errors="coerce")
+    pct_above_ma200 = int((numeric_distance >= 0).sum()) if numeric_distance is not None else 0
+    avg_rsi = df["rsi14"].mean(skipna=True)
+    fear_numeric = pd.to_numeric(df.get("fear_greed"), errors="coerce")
+    extreme_fear = int((fear_numeric <= 25).sum()) if fear_numeric is not None else 0
+
+    overview_cols = st.columns(4)
+    overview_cols[0].metric("跟踪币种数", len(df))
+    overview_cols[1].metric("高于 200 日均线", pct_above_ma200)
+    overview_cols[2].metric("平均 RSI(14)", f"{avg_rsi:.1f}" if not np.isnan(avg_rsi) else "N/A")
+    overview_cols[3].metric("极度恐惧币数", extreme_fear)
+    if latest_ts is not None:
+        st.caption(f"最近行情时间：{latest_ts.strftime('%Y-%m-%d %H:%M:%S')} UTC")
+
+    coins = df["symbol"].tolist()
+    default_selection = coins[:4] if len(coins) >= 4 else coins
+    selected = st.multiselect("选择币种", coins, default=default_selection)
+    if not selected:
+        st.info("请选择至少一个币种。")
+        return
+
+    subset = df[df["symbol"].isin(selected)].reset_index(drop=True)
+    for _, row in subset.iterrows():
+        st.subheader(f"{row['symbol']} | {row.get('name', row['symbol'])}")
+        ts_val = row.get("retrieved_at")
+        if isinstance(ts_val, str):
+            ts_display = ts_val
+        elif pd.notna(ts_val):
+            ts_display = pd.to_datetime(ts_val).strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            ts_display = "N/A"
+        price_source = row.get("price_source", "N/A")
+        st.caption(f"数据时间：{ts_display} UTC | 行情源：{price_source}")
+
+        col1, col2, col3, col4 = st.columns(4)
+        strength_display = row.get("support_strength")
+        strength_display = int(strength_display) if strength_display is not None and not pd.isna(strength_display) else 0
+
+        col1.markdown(
+            f"<div class='metric-card'><p>现价</p><h2>{_format_number(row.get('last_price'))}</h2>"
+            f"<p>7 日：{_colored_percentage(row.get('pct_change_7d'))}</p></div>",
+            unsafe_allow_html=True,
+        )
+        col2.markdown(
+            f"<div class='metric-card'><p>30 日涨跌幅</p><h2>{_colored_percentage(row.get('pct_change_30d'))}</h2></div>",
+            unsafe_allow_html=True,
+        )
+        col3.markdown(
+            f"<div class='metric-card'><p>相对 50 日均线</p><h2>{_colored_percentage(row.get('distance_ma50_pct'))}</h2></div>",
+            unsafe_allow_html=True,
+        )
+        col4.markdown(
+            f"<div class='metric-card'><p>相对 200 日均线</p><h2>{_colored_percentage(row.get('distance_ma200_pct'))}</h2></div>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            f"- **RSI(14)**：{_format_number(row.get('rsi14'))}；"
+            f"**支撑次数**：{strength_display}"
+        )
+
+        trend = row.get("ma_trend", "N/A")
+        supports = _format_supports(row.get("recent_supports"))
+        fib_text = (
+            f"38.2% {_format_number(row.get('fib_38_2'))} | "
+            f"50% {_format_number(row.get('fib_50'))} | "
+            f"61.8% {_format_number(row.get('fib_61_8'))}"
+        )
+        st.markdown(
+            f"- **趋势**：{trend}（50 日 {_format_number(row.get('ma50'))} / 200 日 {_format_number(row.get('ma200'))}）"
+        )
+        st.markdown(f"- **最近支撑**：{supports}")
+        st.markdown(f"- **斐波那契回撤位**：{fib_text}")
+        st.markdown(
+            f"- **摆动区间**：低 {_format_number(row.get('swing_low'))} / 高 {_format_number(row.get('swing_high'))} "
+            f"(跨度 {_format_number(row.get('swing_range'))})"
+        )
+
+        fear_value = row.get("fear_greed_text") or "N/A"
+        st.markdown(
+            f"- **情绪**：恐惧与贪婪 {row.get('fear_greed', 'N/A')} ({fear_value})；"
+            f"资金费率 {_format_number(row.get('funding_rate'), '.4f')}"
+        )
+        st.markdown(
+            f"- **链上指标**：MVRV {_format_number(row.get('mvrv'))} | "
+            f"LTH Cost {_format_number(row.get('lth_cost_basis'))} | "
+            f"aSOPR {_format_number(row.get('asopr'))}"
+        )
+        st.markdown(f"- **成交量（30 日均值）**：{_format_number(row.get('volume_avg_30d'))}")
+        llama_chain = row.get("llama_chain")
+        if llama_chain:
+            st.markdown(
+                f"- **链上 TVL ({llama_chain})**：{_format_usd(row.get('llama_chain_tvl'))}；"
+                f"DEX 24h 量 {_format_usd(row.get('llama_dex_volume_24h'))}；"
+                f"费用 {_format_usd(row.get('llama_fees_24h'))}"
+            )
+        if row.get("llama_stablecoin_supply"):
+            st.markdown(
+                f"- **稳定币供应 ({llama_chain or 'global'})**：{_format_usd(row.get('llama_stablecoin_supply'))}"
+            )
+        if bool(row.get("rsi_divergence")):
+            st.success("RSI 与价格存在底背离，关注潜在反转。")
+
+        hvn_raw = row.get("hvn_zones")
+        zones = []
+        if isinstance(hvn_raw, str):
+            try:
+                zones = json.loads(hvn_raw)
+            except Exception:
+                zones = []
+        if zones:
+            st.markdown("**成交量密集区 (HVN)**")
+            hvn_df = pd.DataFrame(zones)
+            hvn_df = hvn_df.rename(columns={"price_low": "下沿", "price_high": "上沿", "volume": "成交量"})
+            st.dataframe(hvn_df, use_container_width=True)
+        st.divider()
+
+    st.subheader("原始数据")
+    display_cols = [
+        "symbol",
+        "name",
+        "last_price",
+        "ma50",
+        "ma200",
+        "ma_trend",
+        "price_source",
+        "retrieved_at",
+        "recent_supports",
+        "support_strength",
+        "fib_38_2",
+        "fib_50",
+        "fib_61_8",
+        "swing_low",
+        "swing_high",
+        "swing_range",
+        "rsi14",
+        "rsi_divergence",
+        "pct_change_7d",
+        "pct_change_30d",
+        "distance_ma50_pct",
+        "distance_ma200_pct",
+        "llama_chain",
+        "llama_chain_tvl",
+        "llama_dex_volume_24h",
+        "llama_fees_24h",
+        "llama_stablecoin_supply",
+        "mvrv",
+        "lth_cost_basis",
+        "exchange_netflow",
+        "asopr",
+        "funding_rate",
+        "volume_avg_30d",
+        "fear_greed",
+        "fear_greed_text",
+    ]
+    available_cols = [c for c in display_cols if c in subset.columns]
+    st.dataframe(subset[available_cols], use_container_width=True)
+
+
+def main() -> None:
+    view = st.sidebar.radio("选择数据类型", ("股票", "加密货币"))
+    if view == "股票":
+        render_equity_dashboard()
+    else:
+        render_crypto_dashboard()
 
 
 if __name__ == "__main__":

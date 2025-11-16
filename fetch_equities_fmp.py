@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Fetch equity data via FMP (US) and yfinance (CN/HK) and evaluate entry signals.
 
 指标说明：
@@ -39,10 +39,16 @@ STOCKS: List[Dict[str, str]] = [
     {"name_en": "Amazon", "name_cn": "亚马逊", "symbol": "AMZN", "provider": "fmp", "market": "US"},
     {"name_en": "Alphabet", "name_cn": "谷歌", "symbol": "GOOGL", "provider": "fmp", "market": "US"},
     {"name_en": "Nvidia", "name_cn": "英伟达", "symbol": "NVDA", "provider": "fmp", "market": "US"},
+    {"name_en": "Advanced Micro Devices", "name_cn": "��ߵ���", "symbol": "AMD", "provider": "fmp", "market": "US"},
     {"name_en": "Adobe", "name_cn": "奥多比", "symbol": "ADBE", "provider": "fmp", "market": "US"},
     {"name_en": "Salesforce", "name_cn": "赛富时", "symbol": "CRM", "provider": "fmp", "market": "US"},
     {"name_en": "ServiceNow", "name_cn": "ServiceNow", "symbol": "NOW", "provider": "fmp", "market": "US"},
     {"name_en": "Broadcom", "name_cn": "博通", "symbol": "AVGO", "provider": "fmp", "market": "US"},
+    {"name_en": "Marvell Technology", "name_cn": "����ΰ��", "symbol": "MRVL", "provider": "fmp", "market": "US"},
+    {"name_en": "Arista Networks", "name_cn": "Arista ����", "symbol": "ANET", "provider": "fmp", "market": "US"},
+    {"name_en": "Super Micro Computer", "name_cn": "������", "symbol": "SMCI", "provider": "fmp", "market": "US"},
+    {"name_en": "Snowflake", "name_cn": "Snowflake", "symbol": "SNOW", "provider": "fmp", "market": "US"},
+    {"name_en": "MongoDB", "name_cn": "MongoDB", "symbol": "MDB", "provider": "fmp", "market": "US"},
     {"name_en": "Texas Instruments", "name_cn": "德州仪器", "symbol": "TXN", "provider": "fmp", "market": "US"},
     {"name_en": "Taiwan Semiconductor", "name_cn": "台积电", "symbol": "TSM", "provider": "yfinance", "market": "US"},
     {"name_en": "ASML", "name_cn": "阿斯麦", "symbol": "ASML", "provider": "yfinance", "market": "EU"},
@@ -719,3 +725,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

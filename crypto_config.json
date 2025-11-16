@@ -1,0 +1,51 @@
+﻿{
+  "vs_currency": "usd",
+  "lookback_days": 420,
+  "swing_window_days": 120,
+  "volume_bins": 24,
+  "coins": [
+    {
+      "id": "bitcoin",
+      "symbol": "BTC",
+      "name_cn": "比特币",
+      "binance_symbol": "BTCUSDT",
+      "yfinance_symbol": "BTC-USD",
+      "glassnode_asset": "BTC"
+    },
+    {
+      "id": "ethereum",
+      "symbol": "ETH",
+      "name_cn": "以太坊",
+      "binance_symbol": "ETHUSDT",
+      "yfinance_symbol": "ETH-USD",
+      "glassnode_asset": "ETH"
+    },
+    {
+      "id": "solana",
+      "symbol": "SOL",
+      "name_cn": "索拉纳",
+      "binance_symbol": "SOLUSDT",
+      "yfinance_symbol": "SOL-USD",
+      "glassnode_asset": "SOL"
+    },
+    {
+      "id": "dogecoin",
+      "symbol": "DOGE",
+      "name_cn": "狗狗币",
+      "binance_symbol": "DOGEUSDT",
+      "yfinance_symbol": "DOGE-USD",
+      "glassnode_asset": "DOGE"
+    }
+  ],
+  "glassnode_api_key": "",
+  "coingecko_api_key": "9CceHP6X6rhE95dDbqCeUyUs",
+  "glassnode_metrics": {
+    "mvrv": "metrics/market/mvrv_z_score",
+    "lth_cost_basis": "metrics/market/price_realized_usd_long_term_hodlers",
+    "exchange_netflow": "metrics/transactions/transfers_volume_exchanges_adjusted",
+    "asopr": "metrics/indicators/sopr_adjusted",
+    "utxo_realized_price_distribution": "metrics/distribution/utxo_realized_price_distribution"
+  },
+  "stablecoin_asset": "USDT",
+  "stablecoin_exchange_balance_metric": "metrics/supply/stablecoin_exchange_balance"
+}

@@ -58,3 +58,34 @@
 4. 若需要下载或进一步分析，可直接使用 `openbb_outputs/` 中的 CSV。
 
 > 注意：PEG、PB 等部分指标受限于免费数据源，若上市未满 5 年或数据缺失，对应分位会显示 `N/A`，`pe_coverage_years` / `ps_coverage_years` 会显示实际覆盖年限。
+
+## 加密货币“三维度确认法”数据采集
+
+面对震荡下行行情，仅依赖单一技术位容易失效。`fetch_crypto_supports.py` + `crypto_config.json` 新增如下能力：
+
+1. **技术面（CoinGecko / Binance / yfinance fallback）**  
+   - 默认跟踪 BTC、ETH、SOL、DOGE（可在 `crypto_config.json` 扩展），拉取 420 天价格/成交量并生成 50/200 日均线、最近 3 个摆动低点、Volume Profile (HVN) 最高成交区、14 日 RSI、斐波那契 38.2%/50%/61.8% 关键位、7/30 日涨跌幅、距离均线的偏离百分比、摆动区间（Swing Range）上下沿、支撑测试次数、30 日均量等。
+2. **链上数据（Glassnode，可选）**  
+   - 支持 MVRV、长期持有者成本基础、交易所净流量、aSOPR、UTXO 成本分布等指标；在 `crypto_config.json` 中写入 Glassnode API Key 即可生效。
+3. **市场情绪与宏观变量**  
+   - 合并恐惧与贪婪指数、Binance 永续资金费率、交易所稳定币库存变化，帮助判断“弹药”是否充足。
+
+运行方式：
+```bash
+python fetch_crypto_supports.py
+```
+输出位于 `openbb_outputs/crypto/`：
+- `BTC_support_map.json` 等：汇总当前价格、支撑/阻力、链上与情绪信号，可直接投喂到 Agent/知识库。
+- `crypto_support_dashboard.csv`：适合 Excel/Streamlit 统一查看，便于按“技术 + 链上 + 情绪”三重共振制定分批建仓 / 止损 / 减仓策略。
+
+> 若暂未配置 Glassnode API Key，脚本会跳过链上指标，其余技术与情绪数据仍可正常使用。
+
+### 名词解释（加密货币部分常用字段）
+- **recent_supports / 支撑次数**：最近三次摆动低点及对应价格 / 被成功测试的次数，次数越高说明该区间成交确认度越高。
+- **fib_38_2 / 50 / 61_8**：斐波那契关键回撤位，截取近 120 天摆动区间计算的 38.2%、50%、61.8% 目标价。
+- **swing_low / swing_high / swing_range**：最近摆动区间的最低/最高价及跨度，有助于感知当前波动幅度。
+- **pct_change_7d / pct_change_30d**：过去 7 / 30 日的百分比涨跌幅。
+- **distance_ma50_pct / distance_ma200_pct**：现价相对于 50 / 200 日均线的偏离百分比，为负表示位于均线下方。
+- **volume_avg_30d**：过去 30 日的平均成交量，用于观察筹码活跃度变化。
+- **hvn_zones**：Volume Profile 的高成交量节点，每个节点包含价格区间上下沿及成交量。
+- **fear_greed / funding_rate**：来自恐惧与贪婪指数 / Binance 永续合约资金费率的情绪信号。
