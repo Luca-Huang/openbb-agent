@@ -1,0 +1,79 @@
+{
+  "symbol": "ETH",
+  "name": "以太坊",
+  "last_price": 3204.41,
+  "ma50": 3873.4303999999997,
+  "ma200": 3473.33535,
+  "ma_trend": "bearish",
+  "retrieved_at": "2025-11-17T09:34:12.773110+00:00",
+  "price_source": "binance",
+  "recent_supports": [
+    {
+      "date": "2025-11-04",
+      "price": 3287.05
+    },
+    {
+      "date": "2025-10-22",
+      "price": 3805.53
+    },
+    {
+      "date": "2025-10-11",
+      "price": 3746.79
+    }
+  ],
+  "support_strength": 3,
+  "fibonacci_levels": {
+    "0%": 3095.29,
+    "38.2%": 3758.73996,
+    "50%": 3963.68,
+    "61.8%": 4168.62004,
+    "100%": 4832.07
+  },
+  "swing_low": 3095.29,
+  "swing_high": 4832.07,
+  "swing_range": 1736.7799999999997,
+  "top_volume_nodes": [
+    {
+      "price_low": 2453.019166666667,
+      "price_high": 2592.963333333333,
+      "volume": 26391389.483500008
+    },
+    {
+      "price_low": 2592.963333333333,
+      "price_high": 2732.9075000000003,
+      "volume": 21004595.376700006
+    },
+    {
+      "price_low": 3292.684166666667,
+      "price_high": 3432.628333333333,
+      "volume": 18546655.7895
+    }
+  ],
+  "rsi14": 37.69675077630557,
+  "rsi_bullish_divergence": true,
+  "pct_change_7d": -10.186526899953751,
+  "pct_change_30d": -17.60768896511117,
+  "distance_ma50_pct": -17.272038759235222,
+  "distance_ma200_pct": -7.7425679613688905,
+  "volume_avg_30d": 543790.7996933333,
+  "onchain": {
+    "mvrv": null,
+    "lth_cost_basis": null,
+    "exchange_netflow": null,
+    "asopr": null,
+    "utxo_realized_price_distribution": null
+  },
+  "sentiment": {
+    "fear_greed_value": "14",
+    "fear_greed_text": "Extreme Fear",
+    "funding_rate": 0.0001,
+    "stablecoin_exchange_balance": null
+  },
+  "llama": {
+    "llama_chain": "Ethereum",
+    "llama_chain_tvl": 149517590030.0,
+    "llama_dex_volume_24h": 2264006788.0,
+    "llama_fees_24h": 16641570.0,
+    "llama_stablecoin_supply": 165731566657.89984
+  }
+}

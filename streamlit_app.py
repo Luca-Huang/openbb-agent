@@ -125,6 +125,14 @@ th, td {
     color: #1f2a37;
     font-size: 0.92rem;
 }
+table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+table tbody tr:nth-child(even) {
+    background: #fbfdff;
+}
 th {
     background: #f0f4fb;
     color: #143f6b;
@@ -235,6 +243,19 @@ def bool_chip(value: bool | None) -> str:
     return "✅" if bool(value) else "—"
 
 
+def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame) -> pd.DataFrame:
+    """Restrict history rows to match the filtered summary universe."""
+    if summary_df.empty:
+        return history_df.iloc[0:0]
+    if {"symbol"}.issubset(history_df.columns) and "symbol" in summary_df.columns:
+        allowed = summary_df["symbol"].dropna().unique().tolist()
+        return history_df[history_df["symbol"].isin(allowed)]
+    if "name" in history_df.columns and "name" in summary_df.columns:
+        allowed = summary_df["name"].dropna().unique().tolist()
+        return history_df[history_df["name"].isin(allowed)]
+    return history_df
+
+
 @st.cache_data
 def load_history() -> pd.DataFrame:
     df = pd.read_csv(HISTORY_PATH)
@@ -328,6 +349,7 @@ def render_equity_dashboard() -> None:
     )
     summary = summary[summary["market"].isin(selected_markets)]
     history = history[history["market"].isin(selected_markets)]
+    history = align_history_to_summary(history, summary)
     category_options = sorted(summary["theme_category"].dropna().unique())
     selected_categories = st.multiselect(
         "选择产业链层级",
@@ -336,9 +358,7 @@ def render_equity_dashboard() -> None:
     )
     if selected_categories:
         summary = summary[summary["theme_category"].isin(selected_categories)]
-        allow_symbols = summary["symbol"].unique().tolist()
-        if "symbol" in history.columns:
-            history = history[history["symbol"].isin(allow_symbols)]
+        history = align_history_to_summary(history, summary)
 
     search_kw = st.text_input("搜索公司/代码")
     if search_kw:
@@ -350,9 +370,19 @@ def render_equity_dashboard() -> None:
                 for col in search_cols:
                     mask |= summary[col].astype(str).str.lower().str.contains(keyword, na=False)
                 summary = summary[mask]
-                allow_symbols = summary["symbol"].unique().tolist()
-                if "symbol" in history.columns:
-                    history = history[history["symbol"].isin(allow_symbols)]
+                history = align_history_to_summary(history, summary)
+
+    entry_series = summary["entry_recommendation"] if "entry_recommendation" in summary.columns else pd.Series(dtype=str)
+    entry_options = sorted(entry_series.dropna().unique().tolist())
+    if entry_options:
+        selected_entry = st.multiselect(
+            "筛选入场结论",
+            entry_options,
+            default=entry_options,
+        )
+        if selected_entry:
+            summary = summary[summary["entry_recommendation"].isin(selected_entry)]
+            history = align_history_to_summary(history, summary)
 
     if summary.empty or history.empty:
         st.warning("所选条件暂无数据")
@@ -410,157 +440,245 @@ def render_equity_dashboard() -> None:
         unsafe_allow_html=True,
     )
 
-    st.subheader("入场信号评估")
-    required_cols = {
-        "entry_recommendation",
-        "pe_percentile_5y",
-        "ps_percentile_5y",
-        "peg_ratio",
-        "fcf_yield",
-    }
-    if required_cols.issubset(summary.columns):
-        eval_df = summary[
-            [
-                "name",
-                "symbol",
-                "market",
-                "entry_recommendation",
-                "value_score",
-                "value_score_tier",
-                "tier_reason",
-                "entry_reason",
-                "pe_percentile_5y",
-                "ps_percentile_5y",
-                "peg_ratio",
-                "fcf_yield",
-                "refresh_interval_days",
-                "next_refresh_date",
-                "end_pe",
-                "current_ps",
-                "forward_pe",
-                "pe_coverage_years",
-                "ps_coverage_years",
+    st.subheader("入场信号 & 价值得分")
+    tab_eval, tab_score = st.tabs(["入场信号", "价值得分拆解"])
+
+    with tab_eval:
+        required_cols = {
+            "entry_recommendation",
+            "pe_percentile_5y",
+            "ps_percentile_5y",
+            "peg_ratio",
+            "fcf_yield",
+        }
+        if required_cols.issubset(summary.columns):
+            eval_df = summary[
+                [
+                    "name",
+                    "symbol",
+                    "market",
+                    "entry_recommendation",
+                    "value_score",
+                    "value_score_tier",
+                    "tier_reason",
+                    "entry_reason",
+                    "pe_percentile_5y",
+                    "ps_percentile_5y",
+                    "peg_ratio",
+                    "fcf_yield",
+                    "refresh_interval_days",
+                    "next_refresh_date",
+                    "end_pe",
+                    "current_ps",
+                    "forward_pe",
+                    "pe_coverage_years",
+                    "ps_coverage_years",
+                ]
+            ].copy()
+
+            signal_kw = st.text_input("搜索入场信号标的", "", key="signal_search")
+            if signal_kw:
+                keyword = signal_kw.strip().lower()
+                if keyword:
+                    mask = (
+                        eval_df["name"].astype(str).str.lower().str.contains(keyword, na=False)
+                        | eval_df["symbol"].astype(str).str.lower().str.contains(keyword, na=False)
+                    )
+                    eval_df = eval_df[mask]
+
+            eval_df["pe_condition"] = eval_df["pe_percentile_5y"].apply(
+                lambda v: np.nan if pd.isna(v) else v <= 0.3
+            )
+            eval_df["ps_condition"] = eval_df["ps_percentile_5y"].apply(
+                lambda v: np.nan if pd.isna(v) else v <= 0.3
+            )
+            eval_df["peg_condition"] = eval_df["peg_ratio"].apply(
+                lambda v: np.nan if pd.isna(v) else v <= 1
+            )
+            eval_df["fcf_condition"] = eval_df["fcf_yield"].apply(
+                lambda v: np.nan if pd.isna(v) else v >= 0.04
+            )
+
+            eval_df = eval_df.rename(
+                columns={
+                    "name": "标的（中英）",
+                    "symbol": "代码",
+                    "entry_recommendation": "综合结论",
+                    "market": "市场",
+                    "value_score": "价值得分",
+                    "value_score_tier": "得分等级",
+                    "tier_reason": "等级说明",
+                    "entry_reason": "入场说明",
+                    "pe_percentile_5y": "PE分位(5年)",
+                    "ps_percentile_5y": "P/S分位(5年)",
+                    "peg_ratio": "PEG",
+                    "fcf_yield": "自由现金流收益率",
+                    "next_refresh_date": "下一次刷新日期",
+                    "refresh_interval_days": "刷新间隔(天)",
+                    "end_pe": "当前PE",
+                    "current_ps": "当前P/S",
+                    "forward_pe": "远期PE",
+                    "pe_coverage_years": "PE历史覆盖(年)",
+                    "ps_coverage_years": "P/S历史覆盖(年)",
+                }
+            )
+
+            def format_tooltip(row):
+                reason = row.get("等级说明") or "暂无说明"
+                entry = row.get("入场说明") or "暂无说明"
+                return f"价值结论：{reason}\\n入场结论：{entry}"
+
+            eval_df["PE分位(5年)"] = eval_df["PE分位(5年)"].map(fmt_percent)
+            eval_df["P/S分位(5年)"] = eval_df["P/S分位(5年)"].map(fmt_percent)
+            eval_df["自由现金流收益率"] = eval_df["自由现金流收益率"].map(fmt_percent)
+            eval_df["PEG"] = eval_df["PEG"].map(lambda v: fmt_number(v, 2))
+            eval_df["当前PE"] = eval_df["当前PE"].map(lambda v: fmt_number(v, 1))
+            eval_df["当前P/S"] = eval_df["当前P/S"].map(lambda v: fmt_number(v, 2))
+            eval_df["远期PE"] = eval_df["远期PE"].map(lambda v: fmt_number(v, 1))
+            eval_df["PE历史覆盖(年)"] = eval_df["PE历史覆盖(年)"].map(lambda v: fmt_number(v, 1))
+            eval_df["P/S历史覆盖(年)"] = eval_df["P/S历史覆盖(年)"].map(lambda v: fmt_number(v, 1))
+            eval_df["刷新间隔(天)"] = eval_df["刷新间隔(天)"].map(fmt_days)
+            eval_df["下一次刷新日期"] = eval_df["下一次刷新日期"].map(fmt_date)
+            eval_df["市场"] = eval_df["市场"].apply(market_chip)
+            eval_df["综合结论"] = eval_df["综合结论"].apply(lambda v: badge(v, ENTRY_BADGE))
+            eval_df["得分等级"] = eval_df["得分等级"].apply(lambda v: badge(v, TIER_BADGE))
+            eval_df["价值得分"] = eval_df["价值得分"].map(lambda v: fmt_number(v, 1))
+            eval_df["PE分位<=30%"] = eval_df["pe_condition"].map(bool_chip)
+            eval_df["P/S分位<=30%"] = eval_df["ps_condition"].map(bool_chip)
+            eval_df["PEG<=1"] = eval_df["peg_condition"].map(bool_chip)
+            eval_df["FCF收益>=4%"] = eval_df["fcf_condition"].map(bool_chip)
+
+            eval_df["说明"] = eval_df.apply(format_tooltip, axis=1)
+            eval_df["详情"] = eval_df["说明"].apply(
+                lambda text: f"<button class='info-btn' title='{html.escape(text, quote=True)}'>详情</button>"
+            )
+            display_df = eval_df.drop(
+                columns=[
+                    "等级说明",
+                    "入场说明",
+                    "说明",
+                    "pe_condition",
+                    "ps_condition",
+                    "peg_condition",
+                    "fcf_condition",
+                ]
+            )
+            display_columns = [
+                "市场",
+                "标的（中英）",
+                "代码",
+                "综合结论",
+                "得分等级",
+                "价值得分",
+                "PE分位(5年)",
+                "P/S分位(5年)",
+                "当前PE",
+                "当前P/S",
+                "远期PE",
+                "自由现金流收益率",
+                "PEG",
+                "PE历史覆盖(年)",
+                "P/S历史覆盖(年)",
+                "刷新间隔(天)",
+                "下一次刷新日期",
+                "PE分位<=30%",
+                "P/S分位<=30%",
+                "PEG<=1",
+                "FCF收益>=4%",
+                "详情",
             ]
-        ].copy()
+            display_df = display_df[display_columns]
+            table_html = display_df.to_html(escape=False, index=False)
+            st.markdown(f"<div class='table-wrapper'>{table_html}</div>", unsafe_allow_html=True)
+            csv_bytes = summary.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "下载当前筛选结果",
+                data=csv_bytes,
+                file_name="three_month_summary_filtered.csv",
+                mime="text/csv",
+            )
+        else:
+            missing = required_cols - set(summary.columns)
+            st.info(
+                f"当前汇总缺少字段 {missing}，请确认 `openbb_three_months.py` 版本已更新并重新运行。"
+            )
 
-        signal_kw = st.text_input("搜索入场信号标的", "", key="signal_search")
-        if signal_kw:
-            keyword = signal_kw.strip().lower()
-            if keyword:
-                mask = (
-                    eval_df["name"].astype(str).str.lower().str.contains(keyword, na=False)
-                    | eval_df["symbol"].astype(str).str.lower().str.contains(keyword, na=False)
-                )
-                eval_df = eval_df[mask]
-
-        eval_df["pe_condition"] = eval_df["pe_percentile_5y"].apply(
-            lambda v: np.nan if pd.isna(v) else v <= 0.3
-        )
-        eval_df["ps_condition"] = eval_df["ps_percentile_5y"].apply(
-            lambda v: np.nan if pd.isna(v) else v <= 0.3
-        )
-        eval_df["peg_condition"] = eval_df["peg_ratio"].apply(
-            lambda v: np.nan if pd.isna(v) else v <= 1
-        )
-        eval_df["fcf_condition"] = eval_df["fcf_yield"].apply(
-            lambda v: np.nan if pd.isna(v) else v >= 0.04
-        )
-
-        eval_df = eval_df.rename(
-            columns={
-                "name": "标的（中英）",
-                "symbol": "代码",
-                "entry_recommendation": "综合结论",
-                "market": "市场",
-                "value_score": "价值得分",
-                "value_score_tier": "得分等级",
-                "tier_reason": "等级说明",
-                "entry_reason": "入场说明",
-                "pe_percentile_5y": "PE分位(5年)",
-                "ps_percentile_5y": "P/S分位(5年)",
-                "peg_ratio": "PEG",
-                "fcf_yield": "自由现金流收益率",
-                "next_refresh_date": "下一次刷新日期",
-                "refresh_interval_days": "刷新间隔(天)",
-                "end_pe": "当前PE",
-                "current_ps": "当前P/S",
-                "forward_pe": "远期PE",
-                "pe_coverage_years": "PE历史覆盖(年)",
-                "ps_coverage_years": "P/S历史覆盖(年)",
-            }
-        )
-        def format_tooltip(row):
-            reason = row.get("等级说明") or "暂无说明"
-            entry = row.get("入场说明") or "暂无说明"
-            return f"价值结论：{reason}\\n入场结论：{entry}"
-
-        eval_df["PE分位(5年)"] = eval_df["PE分位(5年)"].map(fmt_percent)
-        eval_df["P/S分位(5年)"] = eval_df["P/S分位(5年)"].map(fmt_percent)
-        eval_df["自由现金流收益率"] = eval_df["自由现金流收益率"].map(fmt_percent)
-        eval_df["PEG"] = eval_df["PEG"].map(lambda v: fmt_number(v, 2))
-        eval_df["当前PE"] = eval_df["当前PE"].map(lambda v: fmt_number(v, 1))
-        eval_df["当前P/S"] = eval_df["当前P/S"].map(lambda v: fmt_number(v, 2))
-        eval_df["远期PE"] = eval_df["远期PE"].map(lambda v: fmt_number(v, 1))
-        eval_df["PE历史覆盖(年)"] = eval_df["PE历史覆盖(年)"].map(lambda v: fmt_number(v, 1))
-        eval_df["P/S历史覆盖(年)"] = eval_df["P/S历史覆盖(年)"].map(lambda v: fmt_number(v, 1))
-        eval_df["刷新间隔(天)"] = eval_df["刷新间隔(天)"].map(fmt_days)
-        eval_df["下一次刷新日期"] = eval_df["下一次刷新日期"].map(fmt_date)
-        eval_df["市场"] = eval_df["市场"].apply(market_chip)
-        eval_df["综合结论"] = eval_df["综合结论"].apply(lambda v: badge(v, ENTRY_BADGE))
-        eval_df["得分等级"] = eval_df["得分等级"].apply(lambda v: badge(v, TIER_BADGE))
-        eval_df["价值得分"] = eval_df["价值得分"].map(lambda v: fmt_number(v, 1))
-        eval_df["PE分位<=30%"] = eval_df["pe_condition"].map(bool_chip)
-        eval_df["P/S分位<=30%"] = eval_df["ps_condition"].map(bool_chip)
-        eval_df["PEG<=1"] = eval_df["peg_condition"].map(bool_chip)
-        eval_df["FCF收益>=4%"] = eval_df["fcf_condition"].map(bool_chip)
-
-        eval_df["说明"] = eval_df.apply(format_tooltip, axis=1)
-        eval_df["详情"] = eval_df["说明"].apply(
-            lambda text: f"<button class='info-btn' title='{html.escape(text, quote=True)}'>详情</button>"
-        )
-        display_df = eval_df.drop(
-            columns=[
-                "等级说明",
-                "入场说明",
-                "说明",
-                "pe_condition",
-                "ps_condition",
-                "peg_condition",
-                "fcf_condition",
-            ]
-        )
-        display_columns = [
-            "市场",
-            "标的（中英）",
-            "代码",
-            "综合结论",
-            "得分等级",
-            "价值得分",
-            "PE分位(5年)",
-            "P/S分位(5年)",
-            "当前PE",
-            "当前P/S",
-            "远期PE",
-            "自由现金流收益率",
-            "PEG",
-            "PE历史覆盖(年)",
-            "P/S历史覆盖(年)",
-            "刷新间隔(天)",
-            "下一次刷新日期",
-            "PE分位<=30%",
-            "P/S分位<=30%",
-            "PEG<=1",
-            "FCF收益>=4%",
-            "详情",
+    with tab_score:
+        score_cols = [
+            "name",
+            "symbol",
+            "market",
+            "value_score",
+            "value_score_tier",
+            "score_hist_valuation",
+            "score_abs_valuation",
+            "score_peer_valuation",
+            "score_peg",
+            "score_growth_quality",
+            "score_balance_sheet",
+            "score_shareholder_return",
+            "score_support",
+            "score_sentiment",
         ]
-        display_df = display_df[display_columns]
-        table_html = display_df.to_html(escape=False, index=False)
-        st.markdown(f"<div class='table-wrapper'>{table_html}</div>", unsafe_allow_html=True)
-    else:
-        missing = required_cols - set(summary.columns)
-        st.info(
-            f"当前汇总缺少字段 {missing}，请确认 `openbb_three_months.py` 版本已更新并重新运行。"
-        )
+        if set(score_cols).issubset(summary.columns) and not summary.empty:
+            score_df = summary[score_cols].copy()
+            score_df = score_df.sort_values("value_score", ascending=False)
+            score_df["market_label"] = score_df["market"].map(MARKET_LABEL).fillna(score_df["market"])
+            score_df = score_df.rename(
+                columns={
+                    "name": "标的（中英）",
+                    "symbol": "代码",
+                    "value_score": "综合得分",
+                    "value_score_tier": "等级",
+                    "market_label": "市场",
+                    "score_hist_valuation": "历史估值",
+                    "score_abs_valuation": "绝对估值",
+                    "score_peer_valuation": "同业比较",
+                    "score_peg": "PEG 匹配",
+                    "score_growth_quality": "增长质量",
+                    "score_balance_sheet": "资产负债",
+                    "score_shareholder_return": "股东回报",
+                    "score_support": "技术支撑",
+                    "score_sentiment": "市场情绪",
+                }
+            )
+            score_df = score_df[
+                [
+                    "市场",
+                    "标的（中英）",
+                    "代码",
+                    "综合得分",
+                    "等级",
+                    "历史估值",
+                    "绝对估值",
+                    "同业比较",
+                    "PEG 匹配",
+                    "增长质量",
+                    "资产负债",
+                    "股东回报",
+                    "技术支撑",
+                    "市场情绪",
+                ]
+            ]
+            st.dataframe(
+                score_df,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "综合得分": st.column_config.NumberColumn("综合得分", format="%.1f"),
+                    "历史估值": st.column_config.ProgressColumn("历史估值", min_value=0, max_value=10, format="%d"),
+                    "绝对估值": st.column_config.ProgressColumn("绝对估值", min_value=0, max_value=10, format="%d"),
+                    "同业比较": st.column_config.ProgressColumn("同业比较", min_value=0, max_value=10, format="%d"),
+                    "PEG 匹配": st.column_config.ProgressColumn("PEG 匹配", min_value=0, max_value=15, format="%d"),
+                    "增长质量": st.column_config.ProgressColumn("增长质量", min_value=0, max_value=15, format="%d"),
+                    "资产负债": st.column_config.ProgressColumn("资产负债", min_value=0, max_value=10, format="%d"),
+                    "股东回报": st.column_config.ProgressColumn("股东回报", min_value=0, max_value=10, format="%d"),
+                    "技术支撑": st.column_config.ProgressColumn("技术支撑", min_value=0, max_value=10, format="%d"),
+                    "市场情绪": st.column_config.ProgressColumn("市场情绪", min_value=0, max_value=10, format="%d"),
+                },
+            )
+        else:
+            st.info("当前数据缺少完整的得分拆解字段。")
 
     st.markdown("---")
 

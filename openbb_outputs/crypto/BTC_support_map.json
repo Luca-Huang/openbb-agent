@@ -1,0 +1,79 @@
+{
+  "symbol": "BTC",
+  "name": "比特币",
+  "last_price": 95820.07,
+  "ma50": 109959.94,
+  "ma200": 110441.5676,
+  "ma_trend": "bearish",
+  "retrieved_at": "2025-11-17T09:34:08.791217+00:00",
+  "price_source": "binance",
+  "recent_supports": [
+    {
+      "date": "2025-10-17",
+      "price": 106431.68
+    },
+    {
+      "date": "2025-09-25",
+      "price": 108994.49
+    },
+    {
+      "date": "2025-08-31",
+      "price": 108246.35
+    }
+  ],
+  "support_strength": 3,
+  "fibonacci_levels": {
+    "0%": 94261.44,
+    "38.2%": 105873.1322,
+    "50%": 109459.98999999999,
+    "61.8%": 113046.84779999999,
+    "100%": 124658.54
+  },
+  "swing_low": 94261.44,
+  "swing_high": 124658.54,
+  "swing_range": 30397.09999999999,
+  "top_volume_nodes": [
+    {
+      "price_low": 95172.97125,
+      "price_high": 97853.47750000001,
+      "volume": 1203210.9519620002
+    },
+    {
+      "price_low": 103214.48999999999,
+      "price_high": 105894.99625,
+      "volume": 754585.1621549999
+    },
+    {
+      "price_low": 92492.465,
+      "price_high": 95172.97125,
+      "volume": 731531.0906219999
+    }
+  ],
+  "rsi14": 34.8158659078086,
+  "rsi_bullish_divergence": true,
+  "pct_change_7d": -9.613198161362869,
+  "pct_change_30d": -10.60310578876653,
+  "distance_ma50_pct": -12.859110326906324,
+  "distance_ma200_pct": -13.239125374384841,
+  "volume_avg_30d": 22564.307813666663,
+  "onchain": {
+    "mvrv": null,
+    "lth_cost_basis": null,
+    "exchange_netflow": null,
+    "asopr": null,
+    "utxo_realized_price_distribution": null
+  },
+  "sentiment": {
+    "fear_greed_value": "14",
+    "fear_greed_text": "Extreme Fear",
+    "funding_rate": 9.568e-05,
+    "stablecoin_exchange_balance": null
+  },
+  "llama": {
+    "llama_chain": "Bitcoin",
+    "llama_chain_tvl": 9058240278.0,
+    "llama_dex_volume_24h": 493600.0,
+    "llama_fees_24h": 2827.0,
+    "llama_stablecoin_supply": null
+  }
+}

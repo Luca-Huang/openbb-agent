@@ -15,7 +15,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -25,53 +27,107 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
+try:
+    from supabase import Client, create_client
+except ImportError:  # pragma: no cover - optional dependency
+    Client = None
+    create_client = None
 
 API_KEY = os.environ.get("FMP_API_KEY", "6GfWNQdQxymNoUiM2Be61I9oPDCzeNor")
 BASE_URL = "https://financialmodelingprep.com/stable"
 OUTPUT_DIR = Path(__file__).parent / "openbb_outputs"
+EQUITY_CONFIG_PATH = Path(__file__).parent / "equity_config.json"
 LOOKBACK_DAYS = 730
 PERCENTILE_LOOKBACK_DAYS = 5 * 365
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_SUMMARY_TABLE = os.environ.get("SUPABASE_SUMMARY_TABLE", "equity_summary")
+SUPABASE_HISTORY_TABLE = os.environ.get("SUPABASE_HISTORY_TABLE", "equity_history")
+SUPABASE_CHUNK_SIZE = int(os.environ.get("SUPABASE_CHUNK_SIZE", "50"))
+SUPABASE_MAX_RETRY = int(os.environ.get("SUPABASE_MAX_RETRY", "3"))
+SUPABASE_RETRY_WAIT = float(os.environ.get("SUPABASE_RETRY_WAIT", "2"))
 
-STOCKS: List[Dict[str, str]] = [
-    {"name_en": "Microsoft", "name_cn": "微软", "symbol": "MSFT", "provider": "fmp", "market": "US"},
-    {"name_en": "Apple", "name_cn": "苹果", "symbol": "AAPL", "provider": "fmp", "market": "US"},
-    {"name_en": "Meta Platforms", "name_cn": "Meta 平台", "symbol": "META", "provider": "fmp", "market": "US"},
-    {"name_en": "Amazon", "name_cn": "亚马逊", "symbol": "AMZN", "provider": "fmp", "market": "US"},
-    {"name_en": "Alphabet", "name_cn": "谷歌", "symbol": "GOOGL", "provider": "fmp", "market": "US"},
-    {"name_en": "Nvidia", "name_cn": "英伟达", "symbol": "NVDA", "provider": "fmp", "market": "US"},
-    {"name_en": "Advanced Micro Devices", "name_cn": "��ߵ���", "symbol": "AMD", "provider": "fmp", "market": "US"},
-    {"name_en": "Adobe", "name_cn": "奥多比", "symbol": "ADBE", "provider": "fmp", "market": "US"},
-    {"name_en": "Salesforce", "name_cn": "赛富时", "symbol": "CRM", "provider": "fmp", "market": "US"},
-    {"name_en": "ServiceNow", "name_cn": "ServiceNow", "symbol": "NOW", "provider": "fmp", "market": "US"},
-    {"name_en": "Broadcom", "name_cn": "博通", "symbol": "AVGO", "provider": "fmp", "market": "US"},
-    {"name_en": "Marvell Technology", "name_cn": "����ΰ��", "symbol": "MRVL", "provider": "fmp", "market": "US"},
-    {"name_en": "Arista Networks", "name_cn": "Arista ����", "symbol": "ANET", "provider": "fmp", "market": "US"},
-    {"name_en": "Super Micro Computer", "name_cn": "������", "symbol": "SMCI", "provider": "fmp", "market": "US"},
-    {"name_en": "Snowflake", "name_cn": "Snowflake", "symbol": "SNOW", "provider": "fmp", "market": "US"},
-    {"name_en": "MongoDB", "name_cn": "MongoDB", "symbol": "MDB", "provider": "fmp", "market": "US"},
-    {"name_en": "Texas Instruments", "name_cn": "德州仪器", "symbol": "TXN", "provider": "fmp", "market": "US"},
-    {"name_en": "Taiwan Semiconductor", "name_cn": "台积电", "symbol": "TSM", "provider": "yfinance", "market": "US"},
-    {"name_en": "ASML", "name_cn": "阿斯麦", "symbol": "ASML", "provider": "yfinance", "market": "EU"},
-    {"name_en": "Shopify", "name_cn": "Shopify", "symbol": "SHOP", "provider": "fmp", "market": "US"},
-    {"name_en": "ExxonMobil", "name_cn": "埃克森美孚", "symbol": "XOM", "provider": "fmp", "market": "US"},
-    {"name_en": "Chevron", "name_cn": "雪佛龙", "symbol": "CVX", "provider": "fmp", "market": "US"},
-    {"name_en": "Eli Lilly", "name_cn": "礼来", "symbol": "LLY", "provider": "fmp", "market": "US"},
-    {"name_en": "Johnson & Johnson", "name_cn": "强生", "symbol": "JNJ", "provider": "fmp", "market": "US"},
-    {"name_en": "Costco", "name_cn": "好市多", "symbol": "COST", "provider": "fmp", "market": "US"},
-    {"name_en": "LVMH", "name_cn": "路威酩轩", "symbol": "LVMUY", "provider": "yfinance", "market": "EU"},
-    {"name_en": "Xiaomi Group", "name_cn": "小米集团", "symbol": "1810.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "Tencent Holdings", "name_cn": "腾讯控股", "symbol": "0700.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "ZTE Corporation", "name_cn": "中兴通讯", "symbol": "0763.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "Pop Mart", "name_cn": "泡泡玛特", "symbol": "9992.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "Alibaba Group", "name_cn": "阿里巴巴", "symbol": "9988.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "Baidu", "name_cn": "百度", "symbol": "9888.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "NetEase", "name_cn": "网易", "symbol": "9999.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "Meituan", "name_cn": "美团", "symbol": "3690.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "Trip.com Group (HK)", "name_cn": "携程 (港股)", "symbol": "9961.HK", "provider": "yfinance", "market": "HK"},
-    {"name_en": "Trip.com Group", "name_cn": "携程 (美股)", "symbol": "TCOM", "provider": "fmp", "market": "US"},
-    {"name_en": "Reddit", "name_cn": "Reddit", "symbol": "RDDT", "provider": "fmp", "market": "US"},
-    {"name_en": "Perfect World", "name_cn": "完美世界", "symbol": "002624.SZ", "provider": "yfinance", "market": "CN"},
-]
+def load_equity_universe(config_path: Path = EQUITY_CONFIG_PATH) -> List[Dict[str, str]]:
+    if not config_path.exists():
+        raise FileNotFoundError(f"Equity config not found: {config_path}")
+    with config_path.open(encoding="utf-8") as fh:
+        payload = json.load(fh)
+    equities = payload.get("equities", payload) if isinstance(payload, dict) else payload
+    if not equities:
+        raise ValueError("Equity config contains no entries.")
+    required = {"name_en", "name_cn", "symbol", "provider", "market"}
+    validated: List[Dict[str, str]] = []
+    for item in equities:
+        missing = required - set(item)
+        if missing:
+            raise ValueError(f"Equity config entry missing keys {missing}: {item}")
+        validated.append(item)
+    return validated
+
+
+STOCKS: List[Dict[str, str]] = load_equity_universe()
+
+
+def get_supabase_client() -> Optional["Client"]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    if create_client is None:
+        print("[Supabase] `supabase` Python SDK 未安装，跳过上传。运行 `pip install supabase` 后重试。")
+        return None
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Supabase] 无法初始化客户端：{exc}")
+        return None
+
+
+def dataframe_to_records(df: pd.DataFrame, date_cols: Optional[List[str]] = None) -> List[Dict]:
+    out = df.copy()
+    if date_cols:
+        for col in date_cols:
+            if col in out.columns:
+                out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%Y-%m-%d")
+    return out.replace({np.nan: None}).to_dict(orient="records")
+
+
+def chunk_records(records: List[Dict], size: int) -> List[List[Dict]]:
+    return [records[i : i + size] for i in range(0, len(records), size)]
+
+
+def supabase_upsert(client: "Client", table: str, records: List[Dict], on_conflict: str) -> None:
+    if not client or not records:
+        return
+    for chunk in chunk_records(records, SUPABASE_CHUNK_SIZE):
+        attempt = 0
+        while attempt < SUPABASE_MAX_RETRY:
+            try:
+                client.table(table).upsert(chunk, on_conflict=on_conflict).execute()
+                break
+            except Exception as exc:  # noqa: BLE001
+                attempt += 1
+                print(f"[Supabase] {table} 上传失败（尝试 {attempt}/{SUPABASE_MAX_RETRY}）: {exc}")
+                if attempt >= SUPABASE_MAX_RETRY:
+                    raise
+                time.sleep(SUPABASE_RETRY_WAIT)
+
+
+def sync_to_supabase(summary_df: pd.DataFrame, history_df: pd.DataFrame) -> None:
+    client = get_supabase_client()
+    if not client:
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            print("[Supabase] 未设置 SUPABASE_URL/SUPABASE_KEY，跳过云端缓存。")
+        return
+    try:
+        summary_records = dataframe_to_records(
+            summary_df,
+            ["start_date", "end_date", "best_close_date", "next_refresh_date"],
+        )
+        history_records = dataframe_to_records(history_df, ["date"])
+        supabase_upsert(client, SUPABASE_SUMMARY_TABLE, summary_records, "symbol,end_date")
+        supabase_upsert(client, SUPABASE_HISTORY_TABLE, history_records, "symbol,date")
+        print(f"[Supabase] 已同步 {len(summary_records)} 条 summary、{len(history_records)} 条 history 数据。")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Supabase] 上传失败：{exc}")
 
 
 @dataclass
@@ -618,7 +674,11 @@ def main() -> None:
         long_history = add_close_percentile(long_history, long_history)
 
         yf_symbol = stock.get("yf_symbol", stock["symbol"])
-        metrics = compute_metrics_yf(yf_symbol)
+        try:
+            metrics = compute_metrics_yf(yf_symbol)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{stock['symbol']} metrics fetch failed: {exc}")
+            metrics = {}
         ttm_series = get_ttm_eps_series(yf_symbol)
         if not ttm_series.empty:
             history = pd.merge_asof(
@@ -651,11 +711,13 @@ def main() -> None:
         history["name_cn"] = stock["name_cn"]
         history["name"] = display_name
         history["market"] = stock["market"]
+        history["symbol"] = stock["symbol"]
         history = calculate_support_levels(history)
         combined.append(
             history[
                 [
                     "date",
+                    "symbol",
                     "name",
                     "name_en",
                     "name_cn",
@@ -715,6 +777,8 @@ def main() -> None:
     summary_path = OUTPUT_DIR / "three_month_summary.csv"
     summary_df.to_csv(summary_path, index=False)
 
+    sync_to_supabase(summary_df, combined_df)
+
     print("Saved:", combined_path)
     print("Saved:", summary_path)
     if failures:
@@ -725,4 +789,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

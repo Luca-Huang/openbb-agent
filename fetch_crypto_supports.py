@@ -12,6 +12,8 @@ Outputs:
 from __future__ import annotations
 
 import json
+import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +23,11 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-import os
+try:
+    from supabase import Client, create_client
+except ImportError:  # pragma: no cover
+    Client = None
+    create_client = None
 
 ROOT = Path(__file__).parent
 CONFIG_PATH = ROOT / "crypto_config.json"
@@ -39,6 +45,59 @@ CHAIN_METADATA = {
     "SOL": {"chart": "Solana", "overview": "solana", "stable_gecko": "solana"},
     "DOGE": {"chart": None, "overview": "dogechain", "stable_gecko": "dogecoin"},
 }
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_CRYPTO_TABLE = os.environ.get("SUPABASE_CRYPTO_TABLE", "crypto_supports")
+SUPABASE_CHUNK_SIZE = int(os.environ.get("SUPABASE_CHUNK_SIZE", "50"))
+SUPABASE_MAX_RETRY = int(os.environ.get("SUPABASE_MAX_RETRY", "3"))
+SUPABASE_RETRY_WAIT = float(os.environ.get("SUPABASE_RETRY_WAIT", "2"))
+
+
+def get_supabase_client() -> Optional["Client"]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("[Crypto Supabase] 未设置 SUPABASE_URL/SUPABASE_KEY，跳过上传。")
+        return None
+    if create_client is None:
+        print("[Crypto Supabase] 未安装 `supabase` SDK，运行 `pip install supabase` 后重试。")
+        return None
+    try:
+        return create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Crypto Supabase] 初始化失败：{exc}")
+        return None
+
+
+def chunk_records(records: List[Dict[str, Any]], size: int) -> List[List[Dict[str, Any]]]:
+    return [records[i : i + size] for i in range(0, len(records), size)]
+
+
+def sync_crypto_to_supabase(dashboard_df: pd.DataFrame) -> None:
+    client = get_supabase_client()
+    if not client or dashboard_df.empty:
+        return
+    records = (
+        dashboard_df.replace({np.nan: None})
+        .astype(object)
+        .to_dict(orient="records")
+    )
+    try:
+        for chunk in chunk_records(records, SUPABASE_CHUNK_SIZE):
+            attempt = 0
+            while attempt < SUPABASE_MAX_RETRY:
+                try:
+                    client.table(SUPABASE_CRYPTO_TABLE).upsert(chunk, on_conflict="symbol").execute()
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    attempt += 1
+                    print(
+                        f"[Crypto Supabase] 上传失败（尝试 {attempt}/{SUPABASE_MAX_RETRY}）: {exc}"
+                    )
+                    if attempt >= SUPABASE_MAX_RETRY:
+                        raise
+                    time.sleep(SUPABASE_RETRY_WAIT)
+        print(f"[Crypto Supabase] 已同步 {len(records)} 条 crypto 数据。")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Crypto Supabase] 上传失败：{exc}")
 
 
 def load_config() -> Dict[str, Any]:
@@ -521,6 +580,7 @@ def main() -> None:
     if dashboard_rows:
         dashboard = pd.DataFrame(dashboard_rows)
         dashboard.to_csv(OUTPUT_DIR / "crypto_support_dashboard.csv", index=False)
+        sync_crypto_to_supabase(dashboard)
         print(f"[OK] wrote {OUTPUT_DIR / 'crypto_support_dashboard.csv'}")
     else:
         print("[WARN] No crypto snapshots were produced.")

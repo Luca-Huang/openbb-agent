@@ -1,0 +1,79 @@
+{
+  "symbol": "SOL",
+  "name": "索拉纳",
+  "last_price": 141.68223571777344,
+  "ma50": 187.027177734375,
+  "ma200": 180.2109310913086,
+  "ma_trend": "bearish",
+  "retrieved_at": "2025-11-17T09:34:25.622876+00:00",
+  "price_source": "yfinance",
+  "recent_supports": [
+    {
+      "date": "2025-10-22",
+      "price": 180.14813232421875
+    },
+    {
+      "date": "2025-10-11",
+      "price": 178.05416870117188
+    },
+    {
+      "date": "2025-09-25",
+      "price": 192.38076782226562
+    }
+  ],
+  "support_strength": 3,
+  "fibonacci_levels": {
+    "0%": 137.26573181152344,
+    "38.2%": 179.42760620117187,
+    "50%": 192.45143127441406,
+    "61.8%": 205.47525634765626,
+    "100%": 247.6371307373047
+  },
+  "swing_low": 137.26573181152344,
+  "swing_high": 247.6371307373047,
+  "swing_range": 110.37139892578125,
+  "top_volume_nodes": [
+    {
+      "price_low": 183.69097137451172,
+      "price_high": 190.20586967468262,
+      "volume": 180051671128.0
+    },
+    {
+      "price_low": 196.72076797485352,
+      "price_high": 203.2356662750244,
+      "volume": 153011100394.0
+    },
+    {
+      "price_low": 177.17607307434082,
+      "price_high": 183.69097137451172,
+      "volume": 144089469221.0
+    }
+  ],
+  "rsi14": 33.80620393458575,
+  "rsi_bullish_divergence": false,
+  "pct_change_7d": -15.346375332267748,
+  "pct_change_30d": -24.500685245889642,
+  "distance_ma50_pct": -24.245108420019374,
+  "distance_ma200_pct": -21.37977709799057,
+  "volume_avg_30d": 6199285690.533334,
+  "onchain": {
+    "mvrv": null,
+    "lth_cost_basis": null,
+    "exchange_netflow": null,
+    "asopr": null,
+    "utxo_realized_price_distribution": null
+  },
+  "sentiment": {
+    "fear_greed_value": "14",
+    "fear_greed_text": "Extreme Fear",
+    "funding_rate": null,
+    "stablecoin_exchange_balance": null
+  },
+  "llama": {
+    "llama_chain": "Solana",
+    "llama_chain_tvl": 20608843543.0,
+    "llama_dex_volume_24h": 2312136203.0,
+    "llama_fees_24h": 8350596.0,
+    "llama_stablecoin_supply": 13664706912.565477
+  }
+}
