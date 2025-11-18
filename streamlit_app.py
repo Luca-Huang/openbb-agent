@@ -314,6 +314,18 @@ def load_history() -> pd.DataFrame:
     else:
         df = df.rename(columns={"as_of_date": "date"})
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        df["name"] = df.apply(
+            lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
+            if row.get("name_en")
+            else row.get("name_cn", row.get("symbol")),
+            axis=1,
+        )
+        if "support_level_primary" in df.columns and "support_level" not in df.columns:
+            df["support_level"] = pd.to_numeric(df["support_level_primary"], errors="coerce")
+        if "support_level_secondary" in df.columns:
+            df["support_level_secondary"] = pd.to_numeric(
+                df["support_level_secondary"], errors="coerce"
+            )
     return df
 
 
@@ -326,6 +338,12 @@ def load_summary() -> pd.DataFrame:
         for col in ["start_date", "end_date", "next_refresh_date"]:
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
+        df["name"] = df.apply(
+            lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
+            if row.get("name_en")
+            else row.get("name_cn", row.get("symbol")),
+            axis=1,
+        )
     return df
 
 
