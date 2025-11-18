@@ -44,18 +44,63 @@
 
 ## 使用方法
 
-1. 安装依赖：`pip install -r requirements.txt`（若无 requirements，可参照脚本所需的 `pandas`, `numpy`, `yfinance`, `requests`, `streamlit` 等）。
-2. 如需运行采集脚本：
-   ```bash
-   cd openbb-agent
-   python3 fetch_equities_fmp.py
-   ```
-   生成的 CSV 位于 `openbb_outputs/`。
-3. 启动可视化：
-   ```bash
-   streamlit run streamlit_app.py
-   ```
-4. 若需要下载或进一步分析，可直接使用 `openbb_outputs/` 中的 CSV。
+### 1. 安装依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 配置 Supabase
+
+脚本与 Streamlit 默认使用以下环境变量（可在运行脚本的终端或系统环境中设置）：
+
+```bash
+export SUPABASE_URL="https://wpyrevceqirzpwcpulqz.supabase.co"
+export SUPABASE_KEY="YOUR_SUPABASE_SERVICE_ROLE_OR_ANON_KEY"
+# 如有自定义表名，可覆盖默认值
+export SUPABASE_SUMMARY_TABLE="equity_metrics"
+export SUPABASE_HISTORY_TABLE="equity_metrics_history"
+export SUPABASE_ANALYST_TABLE="us_analyst_estimates"
+export SUPABASE_CRYPTO_TABLE="crypto_supports"
+```
+
+> 默认值已写入脚本，若直接复用仓库提供的 Supabase 实例，可暂不设置。若部署到自己的 Supabase，请务必覆盖 URL/KEY。
+
+### 3. 运行采集脚本（写入 Supabase + CSV）
+
+```bash
+source .venv311/bin/activate  # 如果使用本地虚拟环境
+python fetch_equities_fmp.py
+python fetch_crypto_supports.py
+python fetch_us_analyst_estimates.py
+```
+
+三份脚本会：
+- 拉取/计算指标并生成 `openbb_outputs/*.csv`；
+- 将数据 upsert 到 Supabase（包含失败重试、冲突兜底逻辑）。
+
+> 建议在 Windows 任务计划程序、Linux `cron` 或 GitHub Actions 中定时运行，实现每日自动更新。
+
+### 4. 启动可视化（本地 / Streamlit Cloud）
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Streamlit 应用会优先从 Supabase REST API 读取 `equity_metrics` / `equity_metrics_history` / `crypto_supports` / `us_analyst_estimates`，仅当云端无数据时才回退到本地 CSV。
+
+部署到 Streamlit Cloud 的步骤：
+1. Fork 本仓库；
+2. 在 App 的 Secrets 设置 `SUPABASE_URL` 与 `SUPABASE_KEY`；
+3. Cloud 会自动安装 `requirements.txt` 并运行 `streamlit_app.py`，即得公开访问链接。
+
+### 5. 自动更新建议
+
+- **Windows**：任务计划程序 → 创建任务 → 触发器选“每日”，操作填  
+  `cmd /c "cd C:\path\openbb-agent && C:\Python311\python fetch_equities_fmp.py"`.
+- **Linux/NAS**：`crontab -e` 添加  
+  `0 7 * * * cd /path/openbb-agent && /usr/bin/python3 fetch_equities_fmp.py >> /path/log/equity.log 2>&1`.
+- **GitHub Actions**：建立 schedule workflow，runner 上执行三份脚本，适合无服务器成本的场景。
 
 > 注意：PEG、PB 等部分指标受限于免费数据源，若上市未满 5 年或数据缺失，对应分位会显示 `N/A`，`pe_coverage_years` / `ps_coverage_years` 会显示实际覆盖年限。
 
