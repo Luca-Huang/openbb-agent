@@ -8,6 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Dict, List
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -15,6 +16,14 @@ API_KEY = os.environ.get("FMP_API_KEY", "6GfWNQdQxymNoUiM2Be61I9oPDCzeNor")
 BASE_URL = "https://financialmodelingprep.com/stable/analyst-estimates"
 OUTPUT_DIR = Path(__file__).parent / "openbb_outputs"
 YEARS = 5
+DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
+DEFAULT_SUPABASE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
+)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL)
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", DEFAULT_SUPABASE_KEY)
+SUPABASE_ANALYST_TABLE = os.environ.get("SUPABASE_ANALYST_TABLE", "us_analyst_estimates")
+SUPABASE_CHUNK_SIZE = int(os.environ.get("SUPABASE_CHUNK_SIZE", "200"))
 
 STOCKS: List[Dict[str, str]] = [
     {"symbol": "MSFT", "name": "Microsoft Corporation"},
@@ -109,12 +118,40 @@ def main() -> None:
     result = result.rename(columns=rename_map)
     output_path = OUTPUT_DIR / "us_analyst_estimates.csv"
     result.to_csv(output_path, index=False)
+    sync_to_supabase(result)
 
     print(f"Saved {len(result)} rows to {output_path}")
     if failures:
         print("Warnings:")
         for item in failures:
             print(f" - {item}")
+
+
+def sync_to_supabase(df: pd.DataFrame) -> None:
+    if not SUPABASE_URL or not SUPABASE_KEY or df.empty:
+        print("[Supabase] URL/KEY 未配置或数据为空，跳过分析师数据上传。")
+        return
+    records = df.copy()
+    for col in records.select_dtypes(include=["datetime64[ns]", "datetime64[ns, UTC]"]).columns:
+        records[col] = records[col].dt.strftime("%Y-%m-%d")
+    records = records.where(pd.notna(records), None)
+    payload = records.to_dict(orient="records")
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_ANALYST_TABLE}"
+    for i in range(0, len(payload), SUPABASE_CHUNK_SIZE):
+        chunk = payload[i : i + SUPABASE_CHUNK_SIZE]
+        resp = requests.post(url, headers=headers, json=chunk, timeout=30)
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:  # noqa: BLE001
+            print(f"[Supabase] 上传分析师数据失败: {exc} {resp.text}")
+            raise
+    print(f"[Supabase] 已同步 {len(payload)} 条分析师数据。")
 
 
 if __name__ == "__main__":

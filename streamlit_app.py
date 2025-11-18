@@ -349,9 +349,19 @@ def load_summary() -> pd.DataFrame:
 
 @st.cache_data
 def load_analyst() -> pd.DataFrame:
-    if not ANALYST_PATH.exists():
-        return pd.DataFrame()
-    df = pd.read_csv(ANALYST_PATH, parse_dates=["date（财年/报告期）"])
+    df = fetch_supabase_table(
+        "us_analyst_estimates",
+        order="date（财年/报告期）.asc",
+    )
+    if df is None or df.empty:
+        if not ANALYST_PATH.exists():
+            return pd.DataFrame()
+        df = pd.read_csv(ANALYST_PATH, parse_dates=["date（财年/报告期）"])
+    else:
+        if "date（财年/报告期）" in df.columns:
+            df["date（财年/报告期）"] = pd.to_datetime(
+                df["date（财年/报告期）"], errors="coerce"
+            )
     return df
 
 
