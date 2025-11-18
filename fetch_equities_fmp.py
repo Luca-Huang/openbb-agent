@@ -39,13 +39,82 @@ OUTPUT_DIR = Path(__file__).parent / "openbb_outputs"
 EQUITY_CONFIG_PATH = Path(__file__).parent / "equity_config.json"
 LOOKBACK_DAYS = 730
 PERCENTILE_LOOKBACK_DAYS = 5 * 365
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-SUPABASE_SUMMARY_TABLE = os.environ.get("SUPABASE_SUMMARY_TABLE", "equity_summary")
-SUPABASE_HISTORY_TABLE = os.environ.get("SUPABASE_HISTORY_TABLE", "equity_history")
+DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
+DEFAULT_SUPABASE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
+)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL)
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", DEFAULT_SUPABASE_KEY)
+SUPABASE_SUMMARY_TABLE = os.environ.get("SUPABASE_SUMMARY_TABLE", "equity_metrics")
+SUPABASE_HISTORY_TABLE = os.environ.get("SUPABASE_HISTORY_TABLE", "equity_metrics_history")
 SUPABASE_CHUNK_SIZE = int(os.environ.get("SUPABASE_CHUNK_SIZE", "50"))
 SUPABASE_MAX_RETRY = int(os.environ.get("SUPABASE_MAX_RETRY", "3"))
 SUPABASE_RETRY_WAIT = float(os.environ.get("SUPABASE_RETRY_WAIT", "2"))
+
+SUMMARY_UPLOAD_COLUMNS = [
+    "symbol",
+    "name_en",
+    "name_cn",
+    "market",
+    "theme_category",
+    "investment_reason",
+    "value_score",
+    "value_score_tier",
+    "entry_recommendation",
+    "entry_reason",
+    "tier_reason",
+    "pe_percentile_5y",
+    "ps_percentile_5y",
+    "peg_ratio",
+    "fcf_yield",
+    "end_pe",
+    "current_ps",
+    "forward_pe",
+    "pe_coverage_years",
+    "ps_coverage_years",
+    "refresh_interval_days",
+    "next_refresh_date",
+    "pct_change",
+    "support_level_primary",
+    "support_level_secondary",
+    "pct_change_7d",
+    "pct_change_30d",
+]
+
+HISTORY_UPLOAD_COLUMNS = [
+    "symbol",
+    "as_of_date",
+    "name_en",
+    "name_cn",
+    "market",
+    "theme_category",
+    "investment_reason",
+    "value_score",
+    "value_score_tier",
+    "entry_recommendation",
+    "entry_reason",
+    "tier_reason",
+    "pe_percentile_5y",
+    "ps_percentile_5y",
+    "peg_ratio",
+    "fcf_yield",
+    "end_pe",
+    "current_ps",
+    "forward_pe",
+    "pe_coverage_years",
+    "ps_coverage_years",
+    "refresh_interval_days",
+    "next_refresh_date",
+    "pct_change",
+    "support_level_primary",
+    "support_level_secondary",
+    "ma50",
+    "ma200",
+    "rsi14",
+    "fib_38_2",
+    "fib_50",
+    "fib_61_8",
+]
 
 def load_equity_universe(config_path: Path = EQUITY_CONFIG_PATH) -> List[Dict[str, str]]:
     if not config_path.exists():
@@ -94,16 +163,39 @@ def chunk_records(records: List[Dict], size: int) -> List[List[Dict]]:
     return [records[i : i + size] for i in range(0, len(records), size)]
 
 
-def supabase_upsert(client: "Client", table: str, records: List[Dict], on_conflict: str) -> None:
+def supabase_replace(
+    client: "Client", table: str, records: List[Dict], conflict_cols: List[str]
+) -> None:
+    for rec in records:
+        delete_query = client.table(table).delete()
+        for col in conflict_cols:
+            value = rec.get(col)
+            if value is None:
+                delete_query = None
+                break
+            delete_query = delete_query.eq(col, value)
+        if delete_query is None:
+            continue
+        delete_query.execute()
+    client.table(table).insert(records).execute()
+
+
+def supabase_upsert(
+    client: "Client", table: str, records: List[Dict], conflict_cols: List[str]
+) -> None:
     if not client or not records:
         return
+    conflict_clause = ",".join(conflict_cols)
     for chunk in chunk_records(records, SUPABASE_CHUNK_SIZE):
         attempt = 0
         while attempt < SUPABASE_MAX_RETRY:
             try:
-                client.table(table).upsert(chunk, on_conflict=on_conflict).execute()
+                client.table(table).upsert(chunk, on_conflict=conflict_clause).execute()
                 break
             except Exception as exc:  # noqa: BLE001
+                if "42P10" in str(exc) or "no unique" in str(exc).lower():
+                    supabase_replace(client, table, chunk, conflict_cols)
+                    break
                 attempt += 1
                 print(f"[Supabase] {table} 上传失败（尝试 {attempt}/{SUPABASE_MAX_RETRY}）: {exc}")
                 if attempt >= SUPABASE_MAX_RETRY:
@@ -118,13 +210,32 @@ def sync_to_supabase(summary_df: pd.DataFrame, history_df: pd.DataFrame) -> None
             print("[Supabase] 未设置 SUPABASE_URL/SUPABASE_KEY，跳过云端缓存。")
         return
     try:
+        summary_upload = summary_df.copy()
+        for col in SUMMARY_UPLOAD_COLUMNS:
+            if col not in summary_upload.columns:
+                summary_upload[col] = np.nan
+        summary_upload = summary_upload[SUMMARY_UPLOAD_COLUMNS]
+        history_upload = summary_df.copy()
+        history_upload["as_of_date"] = history_upload["end_date"]
+        for col in HISTORY_UPLOAD_COLUMNS:
+            if col not in history_upload.columns:
+                history_upload[col] = np.nan
+        history_upload = history_upload[HISTORY_UPLOAD_COLUMNS]
         summary_records = dataframe_to_records(
-            summary_df,
+            summary_upload,
             ["start_date", "end_date", "best_close_date", "next_refresh_date"],
         )
-        history_records = dataframe_to_records(history_df, ["date"])
-        supabase_upsert(client, SUPABASE_SUMMARY_TABLE, summary_records, "symbol,end_date")
-        supabase_upsert(client, SUPABASE_HISTORY_TABLE, history_records, "symbol,date")
+        history_records = dataframe_to_records(
+            history_upload,
+            ["start_date", "end_date", "best_close_date", "next_refresh_date", "as_of_date"],
+        )
+        supabase_upsert(client, SUPABASE_SUMMARY_TABLE, summary_records, ["symbol"])
+        supabase_upsert(
+            client,
+            SUPABASE_HISTORY_TABLE,
+            history_records,
+            ["symbol", "as_of_date"],
+        )
         print(f"[Supabase] 已同步 {len(summary_records)} 条 summary、{len(history_records)} 条 history 数据。")
     except Exception as exc:  # noqa: BLE001
         print(f"[Supabase] 上传失败：{exc}")
@@ -269,6 +380,27 @@ def get_ttm_eps_series(symbol: str) -> pd.DataFrame:
         df = df.rename(columns={df.columns[1]: "ttm_eps"})
     df["date"] = pd.to_datetime(df["date"])
     return df
+
+
+def trailing_change_map(history_df: pd.DataFrame, days: int) -> Dict[str, float]:
+    if history_df.empty:
+        return {}
+    result: Dict[str, float] = {}
+    history_sorted = history_df.sort_values("date")
+    grouped = history_sorted.groupby("symbol")
+    offset = pd.Timedelta(days=days)
+    for symbol, group in grouped:
+        if group.empty:
+            continue
+        last_date = group["date"].iloc[-1]
+        last_close = group["close"].iloc[-1]
+        past = group[group["date"] <= last_date - offset]
+        if past.empty:
+            continue
+        base_close = past["close"].iloc[-1]
+        if base_close:
+            result[symbol] = (last_close - base_close) / base_close * 100
+    return result
 
 
 def compute_metrics_yf(symbol: str) -> Dict[str, Optional[float]]:
@@ -773,6 +905,22 @@ def main() -> None:
         return df
 
     summary_df = apply_peer_scores(summary_df)
+    support_levels = (
+        combined_df.sort_values("date")
+        .groupby("symbol")[["support_level", "support_level_secondary"]]
+        .last()
+        .rename(
+            columns={
+                "support_level": "support_level_primary",
+                "support_level_secondary": "support_level_secondary",
+            }
+        )
+    )
+    summary_df = summary_df.merge(support_levels, on="symbol", how="left")
+    change_7d = trailing_change_map(combined_df, 7)
+    change_30d = trailing_change_map(combined_df, 30)
+    summary_df["pct_change_7d"] = summary_df["symbol"].map(change_7d)
+    summary_df["pct_change_30d"] = summary_df["symbol"].map(change_30d)
     summary_df["name"] = summary_df["name_en"] + "（" + summary_df["name_cn"] + "）"
     summary_path = OUTPUT_DIR / "three_month_summary.csv"
     summary_df.to_csv(summary_path, index=False)

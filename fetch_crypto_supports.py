@@ -45,12 +45,54 @@ CHAIN_METADATA = {
     "SOL": {"chart": "Solana", "overview": "solana", "stable_gecko": "solana"},
     "DOGE": {"chart": None, "overview": "dogechain", "stable_gecko": "dogecoin"},
 }
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
+DEFAULT_SUPABASE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
+)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL)
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", DEFAULT_SUPABASE_KEY)
 SUPABASE_CRYPTO_TABLE = os.environ.get("SUPABASE_CRYPTO_TABLE", "crypto_supports")
 SUPABASE_CHUNK_SIZE = int(os.environ.get("SUPABASE_CHUNK_SIZE", "50"))
 SUPABASE_MAX_RETRY = int(os.environ.get("SUPABASE_MAX_RETRY", "3"))
 SUPABASE_RETRY_WAIT = float(os.environ.get("SUPABASE_RETRY_WAIT", "2"))
+CRYPTO_UPLOAD_COLUMNS = [
+    "symbol",
+    "name",
+    "last_price",
+    "ma50",
+    "ma200",
+    "ma_trend",
+    "rsi14",
+    "rsi_divergence",
+    "recent_supports",
+    "support_strength",
+    "fib_38_2",
+    "fib_50",
+    "fib_61_8",
+    "swing_low",
+    "swing_high",
+    "swing_range",
+    "pct_change_7d",
+    "pct_change_30d",
+    "distance_ma50_pct",
+    "distance_ma200_pct",
+    "volume_avg_30d",
+    "llama_chain",
+    "llama_chain_tvl",
+    "llama_dex_volume_24h",
+    "llama_fees_24h",
+    "llama_stablecoin_supply",
+    "mvrv",
+    "lth_cost_basis",
+    "exchange_netflow",
+    "asopr",
+    "funding_rate",
+    "fear_greed",
+    "fear_greed_text",
+    "price_source",
+    "retrieved_at",
+    "stablecoin_exchange_balance",
+]
 
 
 def get_supabase_client() -> Optional["Client"]:
@@ -71,15 +113,25 @@ def chunk_records(records: List[Dict[str, Any]], size: int) -> List[List[Dict[st
     return [records[i : i + size] for i in range(0, len(records), size)]
 
 
+def supabase_replace(client: "Client", table: str, chunk: List[Dict[str, Any]]) -> None:
+    for rec in chunk:
+        symbol = rec.get("symbol")
+        if not symbol:
+            continue
+        client.table(table).delete().eq("symbol", symbol).execute()
+    client.table(table).insert(chunk).execute()
+
+
 def sync_crypto_to_supabase(dashboard_df: pd.DataFrame) -> None:
     client = get_supabase_client()
     if not client or dashboard_df.empty:
         return
-    records = (
-        dashboard_df.replace({np.nan: None})
-        .astype(object)
-        .to_dict(orient="records")
-    )
+    upload_df = dashboard_df.copy()
+    for col in CRYPTO_UPLOAD_COLUMNS:
+        if col not in upload_df.columns:
+            upload_df[col] = np.nan
+    upload_df = upload_df[CRYPTO_UPLOAD_COLUMNS]
+    records = upload_df.replace({np.nan: None}).to_dict(orient="records")
     try:
         for chunk in chunk_records(records, SUPABASE_CHUNK_SIZE):
             attempt = 0
@@ -92,6 +144,9 @@ def sync_crypto_to_supabase(dashboard_df: pd.DataFrame) -> None:
                     print(
                         f"[Crypto Supabase] 上传失败（尝试 {attempt}/{SUPABASE_MAX_RETRY}）: {exc}"
                     )
+                    if "42P10" in str(exc) or "no unique" in str(exc).lower():
+                        supabase_replace(client, SUPABASE_CRYPTO_TABLE, chunk)
+                        break
                     if attempt >= SUPABASE_MAX_RETRY:
                         raise
                     time.sleep(SUPABASE_RETRY_WAIT)

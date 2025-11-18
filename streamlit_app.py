@@ -6,12 +6,14 @@ from __future__ import annotations
 from datetime import date, timedelta
 import html
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 
 st.set_page_config(page_title='价值锚点监控', layout='wide')
@@ -170,6 +172,16 @@ SUMMARY_PATH = DATA_DIR / "three_month_summary.csv"
 ANALYST_PATH = DATA_DIR / "us_analyst_estimates.csv"
 CRYPTO_DIR = DATA_DIR / "crypto"
 CRYPTO_DASHBOARD_PATH = CRYPTO_DIR / "crypto_support_dashboard.csv"
+DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
+DEFAULT_SUPABASE_KEY = (
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
+)
+SUPABASE_URL = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL)
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", DEFAULT_SUPABASE_KEY)
+SUPABASE_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+}
 
 TIER_BADGE = {
     "黄金坑": "badge-green",
@@ -243,6 +255,36 @@ def bool_chip(value: bool | None) -> str:
     return "✅" if bool(value) else "—"
 
 
+def fetch_supabase_table(
+    table: str,
+    select: str = "*",
+    order: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> Optional[pd.DataFrame]:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    params = {"select": select}
+    if order:
+        params["order"] = order
+    if limit:
+        params["limit"] = limit
+    try:
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=SUPABASE_HEADERS,
+            params=params,
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if not data:
+            return pd.DataFrame()
+        return pd.DataFrame(data)
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"Supabase 表 {table} 读取失败：{exc}")
+        return None
+
+
 def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame) -> pd.DataFrame:
     """Restrict history rows to match the filtered summary universe."""
     if summary_df.empty:
@@ -258,13 +300,32 @@ def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame)
 
 @st.cache_data
 def load_history() -> pd.DataFrame:
-    df = pd.read_csv(HISTORY_PATH)
+    df = fetch_supabase_table(
+        "equity_metrics_history",
+        select="symbol,as_of_date,name_en,name_cn,market,theme_category,investment_reason,"
+        "value_score,value_score_tier,entry_recommendation,entry_reason,tier_reason,"
+        "pe_percentile_5y,ps_percentile_5y,peg_ratio,fcf_yield,end_pe,current_ps,"
+        "refresh_interval_days,next_refresh_date,pct_change,support_level_primary,"
+        "support_level_secondary,ma50,ma200,rsi14,fib_38_2,fib_50,fib_61_8",
+        order="as_of_date.asc",
+    )
+    if df is None or df.empty:
+        df = pd.read_csv(HISTORY_PATH)
+    else:
+        df = df.rename(columns={"as_of_date": "date"})
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
     return df
 
 
 @st.cache_data
 def load_summary() -> pd.DataFrame:
-    df = pd.read_csv(SUMMARY_PATH)
+    df = fetch_supabase_table("equity_metrics")
+    if df is None or df.empty:
+        df = pd.read_csv(SUMMARY_PATH)
+    else:
+        for col in ["start_date", "end_date", "next_refresh_date"]:
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
     return df
 
 
@@ -844,10 +905,12 @@ def render_equity_dashboard() -> None:
 
 
 def _load_crypto_dashboard() -> Optional[pd.DataFrame]:
-    if not CRYPTO_DASHBOARD_PATH.exists():
-        st.warning("未找到 `openbb_outputs/crypto/crypto_support_dashboard.csv`，请先运行 `fetch_crypto_supports.py`。")
-        return None
-    df = pd.read_csv(CRYPTO_DASHBOARD_PATH)
+    df = fetch_supabase_table("crypto_supports")
+    if df is None or df.empty:
+        if not CRYPTO_DASHBOARD_PATH.exists():
+            st.warning("未找到 `openbb_outputs/crypto/crypto_support_dashboard.csv`，请先运行 `fetch_crypto_supports.py`。")
+            return None
+        df = pd.read_csv(CRYPTO_DASHBOARD_PATH)
     numeric_cols = [
         "last_price",
         "ma50",
@@ -870,12 +933,23 @@ def _load_crypto_dashboard() -> Optional[pd.DataFrame]:
         df["rsi_divergence"] = df["rsi_divergence"].astype(str).str.lower().isin(["true", "1", "yes"])
     if "retrieved_at" in df.columns:
         df["retrieved_at"] = pd.to_datetime(df["retrieved_at"], errors="coerce")
+    if "recent_supports" in df.columns:
+        df["recent_supports"] = df["recent_supports"].apply(
+            lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (list, dict)) else x
+        )
     return df
 
 
 def _format_supports(raw: str | float | None) -> str:
     if raw is None or (isinstance(raw, float) and np.isnan(raw)):
         return "暂无数据"
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                return ", ".join(f"{item.get('date')}@{item.get('price'):.2f}" for item in data if isinstance(item, dict))
+        except Exception:
+            pass
     return str(raw)
 
 

@@ -1,0 +1,7 @@
+.venv311/
+__pycache__/
+*.pyc
+openbb_outputs/crypto/*.json
+openbb_outputs/crypto/crypto_support_dashboard.csv
+openbb_outputs/three_month_close_history.csv
+openbb_outputs/three_month_summary.csv
