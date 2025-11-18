@@ -182,6 +182,7 @@ SUPABASE_HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
 }
+SUPABASE_HOLDINGS_TABLE = os.environ.get("SUPABASE_HOLDINGS_TABLE", "holdings")
 
 TIER_BADGE = {
     "黄金坑": "badge-green",
@@ -285,6 +286,57 @@ def fetch_supabase_table(
         return None
 
 
+def fetch_holdings() -> pd.DataFrame:
+    df = fetch_supabase_table(SUPABASE_HOLDINGS_TABLE)
+    if df is None:
+        return pd.DataFrame()
+    for col in ["cost_price", "shares", "target_shares"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].str.upper()
+    return df
+
+
+def upsert_holding(record: dict) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("未配置 Supabase，无法保存持仓。")
+        return False
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_HOLDINGS_TABLE}"
+    headers = {
+        **SUPABASE_HEADERS,
+        "Content-Type": "application/json",
+        "Prefer": "resolution=merge-duplicates",
+    }
+    try:
+        resp = requests.post(url, headers=headers, json=[record], timeout=15)
+        resp.raise_for_status()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"保存持仓失败：{exc}")
+        return False
+
+
+def delete_holding(symbol: str) -> bool:
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        st.error("未配置 Supabase，无法删除持仓。")
+        return False
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_HOLDINGS_TABLE}"
+    headers = SUPABASE_HEADERS
+    try:
+        resp = requests.delete(
+            url,
+            headers=headers,
+            params={"symbol": f"eq.{symbol}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"删除持仓失败：{exc}")
+        return False
+
+
 def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame) -> pd.DataFrame:
     """Restrict history rows to match the filtered summary universe."""
     if summary_df.empty:
@@ -349,27 +401,13 @@ def load_summary() -> pd.DataFrame:
 
 @st.cache_data
 def load_analyst() -> pd.DataFrame:
-    df = fetch_supabase_table(
-        "us_analyst_estimates",
-        order="date（财年/报告期）.asc",
-    )
-    if df is None or df.empty:
-        if not ANALYST_PATH.exists():
-            return pd.DataFrame()
-        df = pd.read_csv(ANALYST_PATH, parse_dates=["date（财年/报告期）"])
-    else:
-        if "date（财年/报告期）" in df.columns:
-            df["date（财年/报告期）"] = pd.to_datetime(
-                df["date（财年/报告期）"], errors="coerce"
-            )
-    return df
+    """保留占位，未来如需重启分析师预测模块再启用。"""
+    return pd.DataFrame()
 
 
 def render_equity_dashboard() -> None:
     st.title("OpenBB 三个月表现仪表盘")
-    st.caption(
-        "数据来源：`openbb_three_months.py` 和 `fetch_us_analyst_estimates.py` 生成的 CSV 文件。"
-    )
+    st.caption("数据来源：Supabase（`equity_metrics` / `crypto_supports` / `us_analyst_estimates`）")
     with st.expander("指标说明"):
         st.markdown(
             """
@@ -428,8 +466,6 @@ def render_equity_dashboard() -> None:
         history["theme_category"] = history["symbol"].map(CATEGORY_MAP).fillna("其他")
     else:
         history["theme_category"] = "Unknown"
-    analyst = load_analyst()
-
     market_options = sorted(summary["market"].dropna().unique())
     selected_markets = st.multiselect(
         "选择市场",
@@ -822,7 +858,7 @@ def render_equity_dashboard() -> None:
         ),
         margin=dict(t=60, b=40),
     )
-    st.plotly_chart(norm_fig, use_container_width=True)
+    st.plotly_chart(norm_fig, width="stretch")
 
     st.subheader("PE 走势（TTM）")
     pe_df = filtered.dropna(subset=["pe"])
@@ -837,7 +873,7 @@ def render_equity_dashboard() -> None:
             labels={"pe": "PE (TTM)", "date": "Date"},
             color_discrete_sequence=THEME_COLORS,
         )
-        st.plotly_chart(pe_fig, use_container_width=True)
+        st.plotly_chart(pe_fig, width="stretch")
 
     st.subheader("历史分位（收盘价相对于过去五年）")
     percentile_fig = px.line(
@@ -850,7 +886,7 @@ def render_equity_dashboard() -> None:
         color_discrete_sequence=THEME_COLORS,
     )
     percentile_fig.update_yaxes(tickformat=".0%")
-    st.plotly_chart(percentile_fig, use_container_width=True)
+    st.plotly_chart(percentile_fig, width="stretch")
 
     st.subheader("汇总对比")
     summary_display = summary.copy()
@@ -867,7 +903,7 @@ def render_equity_dashboard() -> None:
         )
         pct_colors = [COLOR_UP if val >= 0 else COLOR_DOWN for val in summary_display["pct_change"]]
         pct_fig.update_traces(marker_color=pct_colors)
-        st.plotly_chart(pct_fig, use_container_width=True)
+        st.plotly_chart(pct_fig, width="stretch")
     with cols[1]:
         pe_bar = px.bar(
             summary_display.dropna(subset=["end_pe"]),
@@ -876,7 +912,7 @@ def render_equity_dashboard() -> None:
             title="期末 PE",
             color_discrete_sequence=THEME_COLORS,
         )
-        st.plotly_chart(pe_bar, use_container_width=True)
+        st.plotly_chart(pe_bar, width="stretch")
     with cols[2]:
         perc_bar = px.bar(
             summary_display,
@@ -887,49 +923,109 @@ def render_equity_dashboard() -> None:
         )
         perc_bar.update_traces(texttemplate="%{y:.1%}", textposition="outside")
         perc_bar.update_yaxes(tickformat=".0%")
-        st.plotly_chart(perc_bar, use_container_width=True)
+        st.plotly_chart(perc_bar, width="stretch")
 
-    st.subheader("分析师预测（最近5年）")
-    if analyst.empty:
-        st.info("未找到 `us_analyst_estimates.csv`，请先运行 `fetch_us_analyst_estimates.py`。")
+    render_holdings_panel(summary, history)
+
+def render_holdings_panel(summary: pd.DataFrame, history: pd.DataFrame) -> None:
+    st.subheader("持仓与风控模块")
+    holdings = fetch_holdings()
+    if summary.empty:
+        st.info("暂无股票数据")
+        return
+    symbol_options = sorted(summary["symbol"].dropna().unique())
+    with st.form("holding_form"):
+        c1, c2, c3, c4 = st.columns(4)
+        selected_symbol = c1.selectbox("标的代码", symbol_options)
+        cost_price = c2.number_input("成本价", min_value=0.0, value=0.0, step=0.1)
+        shares = c3.number_input("当前持仓(股)", min_value=0.0, value=0.0, step=10.0)
+        target_shares = c4.number_input("目标持仓(股)", min_value=0.0, value=shares, step=10.0)
+        submitted = st.form_submit_button("保存持仓")
+        if submitted:
+            record = {
+                "symbol": selected_symbol.upper(),
+                "cost_price": cost_price or None,
+                "shares": shares or None,
+                "target_shares": target_shares or None,
+            }
+            if upsert_holding(record):
+                st.success("持仓已保存")
+                st.experimental_rerun()
+
+    if holdings.empty:
+        st.info("尚未录入持仓")
         return
 
-    analyst_symbols = analyst["symbol（股票代码）"].unique().tolist()
-    default_selection = analyst_symbols[:]
-    selected_analyst = st.multiselect(
-        "选择公司",
-        analyst_symbols,
-        default=default_selection,
+    capital = st.number_input(
+        "战术资金净值（用于计算最大亏损 1.5%）",
+        min_value=0.0,
+        value=200000.0,
+        step=10000.0,
     )
 
-    filtered_analyst = analyst[analyst["symbol（股票代码）"].isin(selected_analyst)]
-    if filtered_analyst.empty:
-        st.warning("请至少选择一个公司查看分析师预测。")
-        return
-
-    eps_fig = px.line(
-        filtered_analyst,
-        x="date（财年/报告期）",
-        y="epsAvg（每股收益均值）",
-        color="symbol（股票代码）",
-        labels={"epsAvg（每股收益均值）": "EPS均值", "date（财年/报告期）": "财年"},
-        markers=True,
-        color_discrete_sequence=THEME_COLORS,
+    latest_history = (
+        history.sort_values("date").dropna(subset=["symbol"]).groupby("symbol").last()
     )
-    st.plotly_chart(eps_fig, use_container_width=True)
+    summary_lookup = summary.set_index("symbol")
+    rows = []
 
-    revenue_fig = px.line(
-        filtered_analyst,
-        x="date（财年/报告期）",
-        y="revenueAvg（营收均值）",
-        color="symbol（股票代码）",
-        labels={"revenueAvg（营收均值）": "营收均值", "date（财年/报告期）": "财年"},
-        markers=True,
-        color_discrete_sequence=THEME_COLORS,
-    )
-    st.plotly_chart(revenue_fig, use_container_width=True)
+    for _, row in holdings.iterrows():
+        symbol = str(row.get("symbol", "")).upper()
+        cost = row.get("cost_price")
+        share_count = row.get("shares")
+        target = row.get("target_shares")
 
-    st.dataframe(filtered_analyst.sort_values("date（财年/报告期）"), use_container_width=True)
+        summary_row = summary_lookup.loc[symbol] if symbol in summary_lookup.index else None
+        hist_row = latest_history.loc[symbol] if symbol in latest_history.index else None
+        current_price = summary_row["end_close"] if summary_row is not None and "end_close" in summary_row else None
+        ma200 = hist_row["ma200"] if hist_row is not None and "ma200" in hist_row else None
+        support_primary = hist_row["support_level"] if hist_row is not None and "support_level" in hist_row else None
+        support_secondary = hist_row["support_level_secondary"] if hist_row is not None and "support_level_secondary" in hist_row else None
+        entry_price = (
+            np.nanmean([current_price, ma200]) if current_price is not None and ma200 is not None else current_price
+        )
+        stop_price = ma200 * 0.97 if ma200 and not pd.isna(ma200) else None
+        tp_50 = cost * 1.5 if cost else None
+        tp_100 = cost * 2 if cost else None
+        max_loss_capital = capital * 0.015 if capital else None
+        allowed_shares = None
+        if cost and stop_price and cost > stop_price and max_loss_capital:
+            allowed_shares = max_loss_capital / (cost - stop_price)
+
+        notes = []
+        if summary_row is not None:
+            if summary_row.get("entry_recommendation"):
+                notes.append(summary_row["entry_recommendation"])
+            if summary_row.get("value_score"):
+                notes.append(f"得分 {summary_row['value_score']:.1f}")
+
+        rows.append(
+            {
+                "标的": symbol,
+                "当前价": current_price,
+                "成本价": cost,
+                "建议首仓": entry_price,
+                "200日均线": ma200,
+                "主支撑": support_primary,
+                "次支撑": support_secondary,
+                "建议止损": stop_price,
+                "止盈50%": tp_50,
+                "止盈100%": tp_100,
+                "当前持仓(股)": share_count,
+                "目标持仓(股)": target,
+                "建议最大仓位(股)": allowed_shares,
+                "备注": " / ".join(notes),
+            }
+        )
+
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    for _, row in holdings.iterrows():
+        symbol = str(row.get("symbol", "")).upper()
+        if st.button(f"删除 {symbol}", key=f"delete_{symbol}"):
+            if delete_holding(symbol):
+                st.success(f"{symbol} 已删除")
+                st.experimental_rerun()
 
 
 def _load_crypto_dashboard() -> Optional[pd.DataFrame]:
