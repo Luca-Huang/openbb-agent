@@ -265,6 +265,54 @@ def bool_chip(value: bool | None) -> str:
     return "✅" if bool(value) else "—"
 
 
+def render_overview_cards(summary_df: pd.DataFrame, history_df: pd.DataFrame) -> None:
+    total_watchlist = len(summary_df)
+    entry_series = summary_df.get("entry_recommendation", pd.Series(dtype=str))
+    entry_ready = int((entry_series == "建议入场").sum())
+    entry_watch = int((entry_series == "可评估入场").sum())
+    avg_score = summary_df["value_score"].mean() if "value_score" in summary_df.columns else np.nan
+    refresh_due = 0
+    if "next_refresh_date" in summary_df.columns:
+        today = date.today()
+        refresh_due = int(
+            summary_df["next_refresh_date"]
+            .apply(lambda val: pd.to_datetime(val, errors="coerce"))
+            .dt.date
+            .lt(today)
+            .sum()
+        )
+    spike_alerts = 0
+    if {"symbol", "volume_spike_ratio"}.issubset(history_df.columns):
+        latest_spike = (
+            history_df.sort_values("date")
+            .dropna(subset=["symbol"])
+            .groupby("symbol")["volume_spike_ratio"]
+            .last()
+        )
+        spike_alerts = int(latest_spike.ge(1.5).sum())
+    cards = [
+        ("监控标的", f"{total_watchlist}", "Watchlist"),
+        ("建议入场", f"{entry_ready}", "满足全部条件"),
+        ("可评估入场", f"{entry_watch}", "≥2 条件"),
+        (
+            "平均得分",
+            f"{avg_score:.1f}" if not np.isnan(avg_score) else "N/A",
+            f"{refresh_due} 条待刷新" if refresh_due else "刷新正常",
+        ),
+        ("量能突增", f"{spike_alerts}", "Spike ≥ 1.5x"),
+    ]
+    cols = st.columns(len(cards))
+    for col, (title, value, subtitle) in zip(cols, cards):
+        card_html = f"""
+        <div class='metric-card'>
+            <h2>{title}</h2>
+            <p>{value}</p>
+            <span class='badge badge-blue'>{subtitle}</span>
+        </div>
+        """
+        col.markdown(card_html, unsafe_allow_html=True)
+
+
 def fetch_supabase_table(
     table: str,
     select: str = "*",
@@ -631,6 +679,9 @@ def render_equity_content() -> None:
     summary = load_summary()
     summary_full = summary.copy()
     history_full = history.copy()
+    render_overview_cards(summary_full, history_full)
+
+    st.markdown("### 快速筛选")
     expected_cols = {
         "refresh_interval_days",
         "next_refresh_date",
@@ -666,26 +717,42 @@ def render_equity_content() -> None:
         history["theme_category"] = history["symbol"].map(CATEGORY_MAP).fillna("其他")
     else:
         history["theme_category"] = "Unknown"
+    filter_col1, filter_col2, filter_col3 = st.columns([1.5, 1.5, 1])
     market_options = sorted(summary["market"].dropna().unique())
-    selected_markets = st.multiselect(
-        "选择市场",
-        market_options,
-        default=market_options,
-    )
+    with filter_col1:
+        selected_markets = st.multiselect(
+            "市场区域",
+            market_options,
+            default=market_options,
+        )
     summary = summary[summary["market"].isin(selected_markets)]
     history = history[history["market"].isin(selected_markets)]
     history = align_history_to_summary(history, summary)
     category_options = sorted(summary["theme_category"].dropna().unique())
-    selected_categories = st.multiselect(
-        "选择产业链层级",
-        category_options,
-        default=category_options,
-    )
+    with filter_col2:
+        selected_categories = st.multiselect(
+            "产业链层级",
+            category_options,
+            default=category_options,
+        )
     if selected_categories:
         summary = summary[summary["theme_category"].isin(selected_categories)]
         history = align_history_to_summary(history, summary)
 
-    search_kw = st.text_input("搜索公司/代码")
+    entry_series = summary["entry_recommendation"] if "entry_recommendation" in summary.columns else pd.Series(dtype=str)
+    entry_options = sorted(entry_series.dropna().unique().tolist())
+    if entry_options:
+        with filter_col3:
+            selected_entry = st.multiselect(
+                "入场结论",
+                entry_options,
+                default=entry_options,
+            )
+        if selected_entry:
+            summary = summary[summary["entry_recommendation"].isin(selected_entry)]
+            history = align_history_to_summary(history, summary)
+
+    search_kw = st.text_input("🔍 搜索公司/代码", placeholder="输入公司名称或股票代码")
     if search_kw:
         keyword = search_kw.strip().lower()
         if keyword:
@@ -696,18 +763,6 @@ def render_equity_content() -> None:
                     mask |= summary[col].astype(str).str.lower().str.contains(keyword, na=False)
                 summary = summary[mask]
                 history = align_history_to_summary(history, summary)
-
-    entry_series = summary["entry_recommendation"] if "entry_recommendation" in summary.columns else pd.Series(dtype=str)
-    entry_options = sorted(entry_series.dropna().unique().tolist())
-    if entry_options:
-        selected_entry = st.multiselect(
-            "筛选入场结论",
-            entry_options,
-            default=entry_options,
-        )
-        if selected_entry:
-            summary = summary[summary["entry_recommendation"].isin(selected_entry)]
-            history = align_history_to_summary(history, summary)
 
     if summary.empty or history.empty:
         st.warning("所选条件暂无数据")
