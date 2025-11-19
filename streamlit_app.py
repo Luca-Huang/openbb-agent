@@ -350,59 +350,67 @@ def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame)
 
 @st.cache_data
 def load_history() -> pd.DataFrame:
-    df = fetch_supabase_table("equity_metrics_history")
-    fallback_used = False
-    if df is None:
-        fallback_used = True
-        df = pd.read_csv(HISTORY_PATH)
-    else:
-        df = df.rename(columns={"as_of_date": "date"})
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    if df is None or df.empty:
-        return pd.DataFrame()
+    supabase_df = fetch_supabase_table("equity_metrics_history")
+    use_fallback = False
+    if supabase_df is not None and not supabase_df.empty:
+        df = supabase_df.rename(columns={"as_of_date": "date"})
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        required_cols = [
+            "close",
+            "close_norm",
+            "close_percentile",
+            "support_level_primary",
+            "support_level_secondary",
+            "ttm_eps",
+            "pe",
+            "ps_ratio",
+            "ma50",
+            "ma200",
+            "rsi14",
+            "fib_38_2",
+            "fib_50",
+            "fib_61_8",
+        ]
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = np.nan
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        essential = ["close", "close_norm", "close_percentile"]
+        if all(df[col].isna().all() for col in essential):
+            st.warning(
+                "Supabase 历史表缺少关键价格字段，临时改用仓库中的 CSV。请运行 `fetch_equities_fmp.py` "
+                "并上传到 Supabase，以恢复云端历史行情。"
+            )
+            use_fallback = True
+        else:
+            if "name" not in df.columns:
+                df["name"] = df.apply(
+                    lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
+                    if row.get("name_en")
+                    else row.get("name_cn", row.get("symbol")),
+                    axis=1,
+                )
+            if "support_level" not in df.columns and "support_level_primary" in df.columns:
+                df["support_level"] = df["support_level_primary"]
+            if "date" in df.columns:
+                df = df.sort_values("date")
+            return df
 
-    required_cols = [
-        "close",
-        "close_norm",
-        "close_percentile",
-        "support_level_primary",
-        "support_level_secondary",
-        "ttm_eps",
-        "pe",
-        "ps_ratio",
-        "ma50",
-        "ma200",
-        "rsi14",
-        "fib_38_2",
-        "fib_50",
-        "fib_61_8",
-    ]
-    for col in required_cols:
-        if col not in df.columns:
-            df[col] = np.nan
-    numeric_cols = required_cols
-    for col in numeric_cols:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "name" not in df.columns:
-        df["name"] = df.apply(
+    # Fallback to repo CSV
+    fallback = pd.read_csv(HISTORY_PATH)
+    fallback["date"] = pd.to_datetime(fallback["date"], errors="coerce")
+    if "support_level" not in fallback.columns and "support_level_primary" in fallback.columns:
+        fallback["support_level"] = fallback["support_level_primary"]
+    if "name" not in fallback.columns:
+        fallback["name"] = fallback.apply(
             lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
             if row.get("name_en")
             else row.get("name_cn", row.get("symbol")),
             axis=1,
         )
-    if "support_level" not in df.columns and "support_level_primary" in df.columns:
-        df["support_level"] = df["support_level_primary"]
-    if not fallback_used:
-        missing = [col for col in ["close", "close_norm", "close_percentile"] if df[col].isna().all()]
-        if missing:
-            st.info(
-                "Supabase 历史表缺少以下字段的数据，将以空值展示："
-                + ", ".join(missing)
-            )
-    if "date" in df.columns:
-        df = df.sort_values("date")
-    return df
+    fallback = fallback.sort_values("date")
+    return fallback
 
 
 @st.cache_data
