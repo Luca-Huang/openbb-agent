@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Interactive dashboard for the OpenBB three-month dataset."""
+"""价值锚点监控仪表盘：多市场价格、估值与量能监控。"""
 
 from __future__ import annotations
 
@@ -16,9 +16,19 @@ import plotly.express as px
 import requests
 import streamlit as st
 
-st.set_page_config(page_title='价值锚点监控', layout='wide')
+st.set_page_config(page_title='价值锚点监控仪表盘', layout='wide')
 
 px.defaults.template = "plotly_white"
+px.defaults.color_discrete_sequence = [
+    "#2E86AB",
+    "#E27D60",
+    "#E8A87C",
+    "#C38D9E",
+    "#41B3A3",
+    "#6C5B7B",
+    "#F67280",
+    "#4D4C7D",
+]
 
 THEME_COLORS = [
     "#143F6B",
@@ -360,6 +370,13 @@ def render_volume_section(history: pd.DataFrame) -> None:
     if latest.empty:
         st.info("当前数据源缺少量能指标。")
         return
+    min_ratio = st.slider(
+        "突增比率阈值（仅显示高于该值的标的）",
+        min_value=1.0,
+        max_value=3.0,
+        value=1.2,
+        step=0.1,
+    )
     metrics = latest[
         [
             "volume",
@@ -371,8 +388,11 @@ def render_volume_section(history: pd.DataFrame) -> None:
             "ad_line",
         ]
     ].reset_index()
+    filtered_metrics = metrics[metrics["volume_spike_ratio"] >= min_ratio].copy()
+    if filtered_metrics.empty:
+        filtered_metrics = metrics.copy()
     st.dataframe(
-        metrics.rename(
+        filtered_metrics.rename(
             columns={
                 "name": "标的",
                 "volume": "当日成交量",
@@ -391,8 +411,29 @@ def render_volume_section(history: pd.DataFrame) -> None:
             )
         },
     )
+    volume_long = metrics.melt(
+        id_vars="name",
+        value_vars=["volume", "volume_ma20"],
+        var_name="类型",
+        value_name="数值",
+    )
+    vol_fig = px.bar(
+        volume_long,
+        x="name",
+        y="数值",
+        color="类型",
+        barmode="group",
+        title="当日成交量 vs 20 日均量",
+        color_discrete_map={"volume": COLOR_UP, "volume_ma20": COLOR_DOWN},
+    )
+    vol_fig.update_layout(legend_title_text="类型")
+    st.plotly_chart(vol_fig, use_container_width=True)
     spike_df = metrics.dropna(subset=["volume_spike_ratio"])
     if not spike_df.empty:
+        colors = [
+            COLOR_UP if val >= 2 else ("#f39c12" if val >= 1.5 else "#95a5a6")
+            for val in spike_df["volume_spike_ratio"]
+        ]
         spike_fig = px.bar(
             spike_df,
             x="name",
@@ -400,6 +441,7 @@ def render_volume_section(history: pd.DataFrame) -> None:
             title="成交量突增比率 (>1 表示高于20日均量)",
             color_discrete_sequence=THEME_COLORS,
         )
+        spike_fig.update_traces(marker_color=colors)
         st.plotly_chart(spike_fig, use_container_width=True)
     obv_df = history.dropna(subset=["obv"])
     if not obv_df.empty:
@@ -587,6 +629,8 @@ def render_equity_content() -> None:
     )
     history = history.dropna(subset=["date"])
     summary = load_summary()
+    summary_full = summary.copy()
+    history_full = history.copy()
     expected_cols = {
         "refresh_interval_days",
         "next_refresh_date",
@@ -1082,11 +1126,11 @@ def render_equity_content() -> None:
         st.plotly_chart(perc_bar, width="stretch")
 
     render_volume_section(filtered)
-    render_holdings_panel(summary, history)
+    render_holdings_panel(summary_full, history_full)
 
 
 def render_equity_dashboard() -> None:
-    st.title("OpenBB 三个月表现仪表盘")
+    st.title("价值锚点监控仪表盘")
     equity_tab, crypto_tab = st.tabs(["股票面板", "加密面板"])
     with equity_tab:
         render_equity_content()
@@ -1201,6 +1245,24 @@ def render_crypto_dashboard() -> None:
         st.info("暂无加密资产数据。请先运行 `python3 fetch_crypto_supports.py` 并同步到 Supabase。")
         return
     crypto_df["symbol"] = crypto_df["symbol"].str.upper()
+    trend_options = sorted(crypto_df["ma_trend"].dropna().unique().tolist())
+    if trend_options:
+        selected_trend = st.multiselect("趋势筛选", trend_options, default=trend_options)
+        if selected_trend:
+            crypto_df = crypto_df[crypto_df["ma_trend"].isin(selected_trend)]
+    search_kw = st.text_input("搜索加密资产")
+    if search_kw:
+        k = search_kw.strip().lower()
+        if k:
+            name_series = (
+                crypto_df["name"].astype(str)
+                if "name" in crypto_df.columns
+                else pd.Series("", index=crypto_df.index)
+            )
+            crypto_df = crypto_df[
+                crypto_df["symbol"].str.lower().str.contains(k)
+                | name_series.str.lower().str.contains(k)
+            ]
     options = sorted(crypto_df["symbol"].unique())
     selected = st.multiselect("选择资产", options, default=options)
     if selected:
@@ -1208,7 +1270,6 @@ def render_crypto_dashboard() -> None:
     display_cols = [
         "symbol",
         "name",
-        "last_price",
         "pct_change_7d",
         "pct_change_30d",
         "volume_spike_ratio",
@@ -1239,7 +1300,6 @@ def render_crypto_dashboard() -> None:
             columns={
                 "symbol": "代码",
                 "name": "资产",
-                "last_price": "现价(USD)",
                 "pct_change_7d": "7日涨跌%",
                 "pct_change_30d": "30日涨跌%",
                 "volume_spike_ratio": "成交量突增比率",
@@ -1289,6 +1349,21 @@ def render_crypto_dashboard() -> None:
                 )
                 col.markdown(f"**{symbol}**")
                 col.table(table_df)
+        price_long = crypto_df.melt(
+            id_vars="symbol",
+            value_vars=["last_price", "ma50", "ma200"],
+            var_name="指标",
+            value_name="数值",
+        )
+        price_chart = px.bar(
+            price_long,
+            x="symbol",
+            y="数值",
+            color="指标",
+            barmode="group",
+            title="现价 / MA50 / MA200 对比",
+        )
+        st.plotly_chart(price_chart, use_container_width=True)
 
 
 
