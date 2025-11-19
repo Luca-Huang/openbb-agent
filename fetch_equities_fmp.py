@@ -87,27 +87,14 @@ HISTORY_UPLOAD_COLUMNS = [
     "name_en",
     "name_cn",
     "market",
-    "theme_category",
-    "investment_reason",
-    "value_score",
-    "value_score_tier",
-    "entry_recommendation",
-    "entry_reason",
-    "tier_reason",
-    "pe_percentile_5y",
-    "ps_percentile_5y",
-    "peg_ratio",
-    "fcf_yield",
-    "end_pe",
-    "current_ps",
-    "forward_pe",
-    "pe_coverage_years",
-    "ps_coverage_years",
-    "refresh_interval_days",
-    "next_refresh_date",
-    "pct_change",
+    "close",
+    "close_norm",
+    "close_percentile",
     "support_level_primary",
     "support_level_secondary",
+    "ttm_eps",
+    "pe",
+    "ps_ratio",
     "ma50",
     "ma200",
     "rsi14",
@@ -215,8 +202,10 @@ def sync_to_supabase(summary_df: pd.DataFrame, history_df: pd.DataFrame) -> None
             if col not in summary_upload.columns:
                 summary_upload[col] = np.nan
         summary_upload = summary_upload[SUMMARY_UPLOAD_COLUMNS]
-        history_upload = summary_df.copy()
-        history_upload["as_of_date"] = history_upload["end_date"]
+        history_upload = history_df.copy()
+        history_upload = history_upload.rename(columns={"date": "as_of_date"})
+        if "support_level" in history_upload.columns and "support_level_primary" not in history_upload.columns:
+            history_upload["support_level_primary"] = history_upload["support_level"]
         for col in HISTORY_UPLOAD_COLUMNS:
             if col not in history_upload.columns:
                 history_upload[col] = np.nan
@@ -362,6 +351,33 @@ def calculate_support_levels(df: pd.DataFrame, window: int = 20) -> pd.DataFrame
     df["support_level"] = rolling_min
     df["support_level_secondary"] = rolling_min * 1.1
     return df
+
+
+def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
+    if series.empty:
+        return pd.Series(dtype=float)
+    delta = series.diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
+
+
+def add_trend_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    enriched = df.sort_values("date").copy()
+    enriched["ma50"] = enriched["close"].rolling(window=50, min_periods=1).mean()
+    enriched["ma200"] = enriched["close"].rolling(window=200, min_periods=1).mean()
+    enriched["rsi14"] = compute_rsi(enriched["close"], period=14)
+    rolling_high = enriched["close"].rolling(window=120, min_periods=1).max()
+    rolling_low = enriched["close"].rolling(window=120, min_periods=1).min()
+    diff = (rolling_high - rolling_low).replace(0, np.nan)
+    enriched["fib_38_2"] = rolling_high - diff * 0.382
+    enriched["fib_50"] = rolling_high - diff * 0.5
+    enriched["fib_61_8"] = rolling_high - diff * 0.618
+    return enriched
 
 
 def get_ttm_eps_series(symbol: str) -> pd.DataFrame:
@@ -845,6 +861,7 @@ def main() -> None:
         history["market"] = stock["market"]
         history["symbol"] = stock["symbol"]
         history = calculate_support_levels(history)
+        history = add_trend_indicators(history)
         combined.append(
             history[
                 [
@@ -862,6 +879,12 @@ def main() -> None:
                     "ttm_eps",
                     "pe",
                     "ps_ratio",
+                    "ma50",
+                    "ma200",
+                    "rsi14",
+                    "fib_38_2",
+                    "fib_50",
+                    "fib_61_8",
                 ]
             ].copy()
         )

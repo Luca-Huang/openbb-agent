@@ -352,30 +352,61 @@ def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame)
 def load_history() -> pd.DataFrame:
     df = fetch_supabase_table(
         "equity_metrics_history",
-        select="symbol,as_of_date,name_en,name_cn,market,theme_category,investment_reason,"
-        "value_score,value_score_tier,entry_recommendation,entry_reason,tier_reason,"
-        "pe_percentile_5y,ps_percentile_5y,peg_ratio,fcf_yield,end_pe,current_ps,"
-        "refresh_interval_days,next_refresh_date,pct_change,support_level_primary,"
-        "support_level_secondary,ma50,ma200,rsi14,fib_38_2,fib_50,fib_61_8",
-        order="as_of_date.asc",
+        select="symbol,as_of_date,name_en,name_cn,market,close,close_norm,close_percentile,"
+        "support_level_primary,support_level_secondary,ttm_eps,pe,ps_ratio,"
+        "ma50,ma200,rsi14,fib_38_2,fib_50,fib_61_8",
     )
-    if df is None or df.empty:
+    fallback_used = False
+    if df is None:
+        fallback_used = True
         df = pd.read_csv(HISTORY_PATH)
     else:
         df = df.rename(columns={"as_of_date": "date"})
+    if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    required_cols = [
+        "close",
+        "close_norm",
+        "close_percentile",
+        "support_level_primary",
+        "support_level_secondary",
+        "ttm_eps",
+        "pe",
+        "ps_ratio",
+        "ma50",
+        "ma200",
+        "rsi14",
+        "fib_38_2",
+        "fib_50",
+        "fib_61_8",
+    ]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = np.nan
+    numeric_cols = required_cols
+    for col in numeric_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "name" not in df.columns:
         df["name"] = df.apply(
             lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
             if row.get("name_en")
             else row.get("name_cn", row.get("symbol")),
             axis=1,
         )
-        if "support_level_primary" in df.columns and "support_level" not in df.columns:
-            df["support_level"] = pd.to_numeric(df["support_level_primary"], errors="coerce")
-        if "support_level_secondary" in df.columns:
-            df["support_level_secondary"] = pd.to_numeric(
-                df["support_level_secondary"], errors="coerce"
+    if "support_level" not in df.columns and "support_level_primary" in df.columns:
+        df["support_level"] = df["support_level_primary"]
+    if not fallback_used:
+        missing = [col for col in ["close", "close_norm", "close_percentile"] if df[col].isna().all()]
+        if missing:
+            st.info(
+                "Supabase 历史表缺少以下字段的数据，将以空值展示："
+                + ", ".join(missing)
             )
+    if "date" in df.columns:
+        df = df.sort_values("date")
     return df
 
 
@@ -394,6 +425,9 @@ def load_summary() -> pd.DataFrame:
             else row.get("name_cn", row.get("symbol")),
             axis=1,
         )
+    for col in ["end_close", "end_close_percentile", "pct_change", "pct_change_7d", "pct_change_30d"]:
+        if col not in df.columns:
+            df[col] = np.nan
     return df
 
 
@@ -405,7 +439,7 @@ def load_analyst() -> pd.DataFrame:
 
 def render_equity_dashboard() -> None:
     st.title("OpenBB 三个月表现仪表盘")
-    st.caption("数据来源：Supabase（`equity_metrics` / `crypto_supports` / `us_analyst_estimates`）")
+    st.caption("数据来源：Supabase（`equity_metrics` / `equity_metrics_history` / `holdings`）")
     with st.expander("指标说明"):
         st.markdown(
             """
@@ -436,6 +470,8 @@ def render_equity_dashboard() -> None:
         "next_refresh_date",
         "current_ps",
         "forward_pe",
+        "end_close",
+        "end_close_percentile",
         "market",
         "score_hist_valuation",
         "score_abs_valuation",
