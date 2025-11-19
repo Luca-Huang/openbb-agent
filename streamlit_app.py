@@ -350,12 +350,7 @@ def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame)
 
 @st.cache_data
 def load_history() -> pd.DataFrame:
-    df = fetch_supabase_table(
-        "equity_metrics_history",
-        select="symbol,as_of_date,name_en,name_cn,market,close,close_norm,close_percentile,"
-        "support_level_primary,support_level_secondary,ttm_eps,pe,ps_ratio,"
-        "ma50,ma200,rsi14,fib_38_2,fib_50,fib_61_8",
-    )
+    df = fetch_supabase_table("equity_metrics_history")
     fallback_used = False
     if df is None:
         fallback_used = True
