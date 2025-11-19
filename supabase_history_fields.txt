@@ -1,0 +1,156 @@
+Supabase `equity_metrics_history` 推荐字段（字段名 / 含义 / 中文说明）：
+
+A. **核心行情 & 估值（必备）**
+1. open / high / low / close — 当日 OHLC（未复权）——还原 K 线、VWAP 与资金线计算的基础。
+2. close_norm — Normalized close price — 归一化收盘价（close ÷ 观察期首日 close），用于多标的对比。
+3. close_percentile — 5Y percentile of close — 收盘价在过去五年价格分布中的百分位，驱动历史分位图及刷新频率。
+4. support_level_primary — Primary support — 主支撑（滚动 20 日最低），供风控/提示。
+5. support_level_secondary — Secondary support — 次支撑（主支撑×1.1），辅助识别区间。
+6. ttm_eps — Trailing twelve-month EPS — 近 4 季 EPS 之和，是市盈率分母。
+7. pe — Price / Earnings — 当日市盈率（close ÷ ttm_eps）。
+8. ps_ratio — Price / Sales — 当日市销率（close ÷ 每股收入），用于估值分位。
+9. ma50 / ma200 — 50/200 日均线，用于“关键技术支撑”与止损逻辑。
+10. rsi14 — 14 日 RSI，衡量情绪。
+11. fib_38_2 / fib_50 / fib_61_8 — 120 日高低点的斐波那契回档位，用于寻找共振支撑。
+
+B. **成交量与资金流（强烈建议保留）**
+12. volume — Daily volume — 日成交量（股数/手）。
+13. volume_ma20 — 20-day volume MA — 过去 20 日平均成交量（对应“基线”）。
+14. volume_spike_ratio — Spike Ratio = volume ÷ volume_ma20 —— 量能突增过滤器（>1.5x/2.0x）。
+15. obv — On-Balance Volume — 能量潮，累计判别量价背离。
+16. vpt — Volume Price Trend — 成交量价格趋势，辅助确认资金流向。
+17. vwap — Volume Weighted Average Price — 简化 VWAP（累积典型价 × 成交量 ÷ 成交量），估算主力成本。
+18. ad_line — Accumulation/Distribution Line — A/D 线，监控资金在区间内的累积/派发。
+
+说明：Supabase 目前缺少这些字段（尤其是 volume 及衍生指标），导致前端只能回退到仓库 CSV。请先在 `equity_metrics_history` 中新增列（建议 `double precision`），再运行 `python3 fetch_equities_fmp.py` 重写 CSV 并同步 Supabase，即可恢复云端数据。
+
+---
+
+Supabase `crypto_supports` 表应同步的字段（字段名 / 含义 / 中文说明）：
+
+1. symbol — Asset ticker — 加密资产代码（BTC/ETH/SOL/DOGE 等），主键。
+2. name — Asset name — 资产中文/英文名（如 “比特币 Bitcoin”），方便在前端直接展示。
+3. last_price — Last spot price — 最新价格（USD），用来计算涨跌与支撑距离。
+4. ma50 — 50-day SMA — 50 日均价，判断短期趋势/支撑。
+5. ma200 — 200-day SMA — 200 日均价，判断长期趋势/支撑。
+6. ma_trend — Trend flag — MA 趋势标签（如 Up/Down/Neutral），来自 ma50、ma200 的相对位置。
+7. rsi14 — 14-day RSI — 14 日 RSI，用于观测超买/超卖。
+8. rsi_divergence — RSI divergence flag — 是否出现 RSI 背离（如 Bullish / Bearish Divergence）。
+9. recent_supports — JSON list of supports — 近期关键支撑价位列表（JSON 字符串），供前端渲染支撑卡片。
+10. support_strength — Support confidence score — 支撑可靠度评分（0-1 或 0-100）。
+11. fib_38_2 — Fibonacci 38.2% level — 以近 180 日高低点计算的 38.2% 回档位。
+12. fib_50 — Fibonacci 50% level — 近 180 日 50% 回档位。
+13. fib_61_8 — Fibonacci 61.8% level — 近 180 日 61.8% 回档位。
+14. swing_low — Recent swing low — 近期摆动低点价格。
+15. swing_high — Recent swing high — 近期摆动高点价格。
+16. swing_range — swing_high - swing_low — 摆动区间幅度，用于判断波动率。
+17. pct_change_7d — 7-day % change — 近 7 日涨跌幅（百分比）。
+18. pct_change_30d — 30-day % change — 近 30 日涨跌幅。
+19. distance_ma50_pct — % distance to MA50 — 当前价距 50 日均线百分比。
+20. distance_ma200_pct — % distance to MA200 — 当前价距 200 日均线百分比。
+21. volume_latest — Latest daily volume — 最近一日成交量。
+22. volume_ma20 — 20-day volume MA — 过去 20 日平均成交量。
+23. volume_spike_ratio — Spike ratio — volume_latest ÷ volume_ma20，用于确认突破有效性。
+24. obv — On-Balance Volume — 能量潮，量价背离监控。
+25. vpt — Volume Price Trend — 成交量价格趋势。
+26. vwap — VWAP — 以价格×成交量累计的加权平均价，估算主力成本。
+27. ad_line — Accumulation/Distribution line — 累积/派发线，衡量筹码流向。
+28. volume_avg_30d — 30-day avg volume — 30 日平均成交量。
+29. llama_chain — DefiLlama chain slug — 对应链 ID（如 ethereum/solana），用于关联链上数据。
+30. llama_chain_tvl — Chain TVL (USD) — 链上总锁仓量。
+31. llama_dex_volume_24h — DEX volume 24h — 该链 DEX 24h 成交额。
+32. llama_fees_24h — Protocol fees 24h — 链上 24h 费用收入。
+33. llama_stablecoin_supply — Stablecoin supply — 该链稳定币存量。
+34. mvrv — MVRV ratio — 市值与实现市值之比，用于判断高估/低估。
+35. lth_cost_basis — Long-term holder cost basis — 长期持有者成本。
+36. exchange_netflow — Exchange netflow — 交易所净流量（正=流入，负=流出）。
+37. asopr — Adjusted SOPR — 调整后的盈利率，衡量抛压。
+38. funding_rate — Binance perpetual funding rate — 永续合约资金费率。
+39. fear_greed — Fear & Greed index value — 恐惧与贪婪指数值（0-100）。
+40. fear_greed_text — Fear & Greed label — 指数对应描述（Extreme Fear / Greed 等）。
+41. price_source — Price data source — 价格来源（Binance / CoinGecko / yfinance），方便溯源。
+42. retrieved_at — ISO timestamp — 数据抓取时间（ISO8601），判断新鲜度。
+43. stablecoin_exchange_balance — Stablecoin exchange balance — 主要交易所稳定币余额，反映买盘火力。
+
+请在 Supabase 中建好 `crypto_supports` 的上述字段（数值型建议用 `double precision`，文本字段用 `text`，`recent_supports` 可设为 `jsonb`），然后运行 `python3 fetch_crypto_supports.py` 把数据上传，Streamlit 才能展示完整的加密资产支撑面板。
+
+---
+
+参考建表 / 增列 SQL（可直接在 Supabase SQL Editor 执行）：
+
+```sql
+-- equity_metrics_history
+alter table public.equity_metrics_history
+    add column if not exists open double precision,
+    add column if not exists high double precision,
+    add column if not exists low double precision,
+    add column if not exists close double precision,
+    add column if not exists close_norm double precision,
+    add column if not exists close_percentile double precision,
+    add column if not exists support_level_primary double precision,
+    add column if not exists support_level_secondary double precision,
+    add column if not exists ttm_eps double precision,
+    add column if not exists pe double precision,
+    add column if not exists ps_ratio double precision,
+    add column if not exists ma50 double precision,
+    add column if not exists ma200 double precision,
+    add column if not exists rsi14 double precision,
+    add column if not exists fib_38_2 double precision,
+    add column if not exists fib_50 double precision,
+    add column if not exists fib_61_8 double precision,
+    add column if not exists volume double precision,
+    add column if not exists volume_ma20 double precision,
+    add column if not exists volume_spike_ratio double precision,
+    add column if not exists obv double precision,
+    add column if not exists vpt double precision,
+    add column if not exists vwap double precision,
+    add column if not exists ad_line double precision;
+
+-- crypto_supports
+alter table public.crypto_supports
+    add column if not exists symbol text,
+    add column if not exists name text,
+    add column if not exists last_price double precision,
+    add column if not exists ma50 double precision,
+    add column if not exists ma200 double precision,
+    add column if not exists ma_trend text,
+    add column if not exists rsi14 double precision,
+    add column if not exists rsi_divergence boolean,
+    add column if not exists recent_supports jsonb,
+    add column if not exists support_strength double precision,
+    add column if not exists fib_38_2 double precision,
+    add column if not exists fib_50 double precision,
+    add column if not exists fib_61_8 double precision,
+    add column if not exists swing_low double precision,
+    add column if not exists swing_high double precision,
+    add column if not exists swing_range double precision,
+    add column if not exists pct_change_7d double precision,
+    add column if not exists pct_change_30d double precision,
+    add column if not exists distance_ma50_pct double precision,
+    add column if not exists distance_ma200_pct double precision,
+    add column if not exists volume_latest double precision,
+    add column if not exists volume_ma20 double precision,
+    add column if not exists volume_spike_ratio double precision,
+    add column if not exists obv double precision,
+    add column if not exists vpt double precision,
+    add column if not exists vwap double precision,
+    add column if not exists ad_line double precision,
+    add column if not exists volume_avg_30d double precision,
+    add column if not exists llama_chain text,
+    add column if not exists llama_chain_tvl double precision,
+    add column if not exists llama_dex_volume_24h double precision,
+    add column if not exists llama_fees_24h double precision,
+    add column if not exists llama_stablecoin_supply double precision,
+    add column if not exists mvrv double precision,
+    add column if not exists lth_cost_basis double precision,
+    add column if not exists exchange_netflow double precision,
+    add column if not exists asopr double precision,
+    add column if not exists funding_rate double precision,
+    add column if not exists fear_greed double precision,
+    add column if not exists fear_greed_text text,
+    add column if not exists price_source text,
+    add column if not exists retrieved_at timestamptz,
+    add column if not exists stablecoin_exchange_balance double precision;
+```
+
+执行完上面的 `ALTER TABLE` 后，重新运行 `python3 fetch_equities_fmp.py` 与 `python3 fetch_crypto_supports.py`，即可把量能指标与行情数据写入 Supabase。

@@ -170,6 +170,7 @@ DATA_DIR = Path(__file__).parent / "openbb_outputs"
 HISTORY_PATH = DATA_DIR / "three_month_close_history.csv"
 SUMMARY_PATH = DATA_DIR / "three_month_summary.csv"
 ANALYST_PATH = DATA_DIR / "us_analyst_estimates.csv"
+CRYPTO_CSV_PATH = DATA_DIR / "crypto" / "crypto_support_dashboard.csv"
 DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
 DEFAULT_SUPABASE_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
@@ -348,6 +349,71 @@ def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame)
     return history_df
 
 
+def render_volume_section(history: pd.DataFrame) -> None:
+    st.subheader("量能指标速览")
+    latest = (
+        history.sort_values("date")
+        .dropna(subset=["symbol"])
+        .groupby("name")
+        .last()
+    )
+    if latest.empty:
+        st.info("当前数据源缺少量能指标。")
+        return
+    metrics = latest[
+        [
+            "volume",
+            "volume_ma20",
+            "volume_spike_ratio",
+            "obv",
+            "vpt",
+            "vwap",
+            "ad_line",
+        ]
+    ].reset_index()
+    st.dataframe(
+        metrics.rename(
+            columns={
+                "name": "标的",
+                "volume": "当日成交量",
+                "volume_ma20": "20日均量",
+                "volume_spike_ratio": "突增比率",
+                "obv": "OBV",
+                "vpt": "VPT",
+                "vwap": "VWAP",
+                "ad_line": "A/D线",
+            }
+        ),
+        use_container_width=True,
+        column_config={
+            "突增比率": st.column_config.ProgressColumn(
+                "突增比率", min_value=0.0, max_value=3.0, format="%.2f"
+            )
+        },
+    )
+    spike_df = metrics.dropna(subset=["volume_spike_ratio"])
+    if not spike_df.empty:
+        spike_fig = px.bar(
+            spike_df,
+            x="name",
+            y="volume_spike_ratio",
+            title="成交量突增比率 (>1 表示高于20日均量)",
+            color_discrete_sequence=THEME_COLORS,
+        )
+        st.plotly_chart(spike_fig, use_container_width=True)
+    obv_df = history.dropna(subset=["obv"])
+    if not obv_df.empty:
+        obv_fig = px.line(
+            obv_df,
+            x="date",
+            y="obv",
+            color="name",
+            title="OBV（能量潮）走势",
+            color_discrete_sequence=THEME_COLORS,
+        )
+        st.plotly_chart(obv_fig, use_container_width=True)
+
+
 @st.cache_data
 def load_history() -> pd.DataFrame:
     supabase_df = fetch_supabase_table("equity_metrics_history")
@@ -356,46 +422,56 @@ def load_history() -> pd.DataFrame:
         df = supabase_df.rename(columns={"as_of_date": "date"})
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
-        required_cols = [
-            "close",
-            "close_norm",
-            "close_percentile",
-            "support_level_primary",
-            "support_level_secondary",
-            "ttm_eps",
-            "pe",
-            "ps_ratio",
-            "ma50",
-            "ma200",
-            "rsi14",
-            "fib_38_2",
-            "fib_50",
-            "fib_61_8",
-        ]
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = np.nan
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        essential = ["close", "close_norm", "close_percentile"]
-        if all(df[col].isna().all() for col in essential):
-            st.warning(
-                "Supabase 历史表缺少关键价格字段，临时改用仓库中的 CSV。请运行 `fetch_equities_fmp.py` "
-                "并上传到 Supabase，以恢复云端历史行情。"
+    required_cols = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "close_norm",
+        "close_percentile",
+        "support_level_primary",
+        "support_level_secondary",
+        "ttm_eps",
+        "pe",
+        "ps_ratio",
+        "ma50",
+        "ma200",
+        "rsi14",
+        "fib_38_2",
+        "fib_50",
+        "fib_61_8",
+        "volume",
+        "volume_ma20",
+        "volume_spike_ratio",
+        "obv",
+        "vpt",
+        "vwap",
+        "ad_line",
+    ]
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = np.nan
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    essential = ["close", "close_norm", "close_percentile"]
+    if all(df[col].isna().all() for col in essential):
+        st.warning(
+            "Supabase 历史表缺少关键价格字段，临时改用仓库中的 CSV。请运行 `fetch_equities_fmp.py` "
+            "并上传到 Supabase，以恢复云端历史行情。"
+        )
+        use_fallback = True
+    else:
+        if "name" not in df.columns:
+            df["name"] = df.apply(
+                lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
+                if row.get("name_en")
+                else row.get("name_cn", row.get("symbol")),
+                axis=1,
             )
-            use_fallback = True
-        else:
-            if "name" not in df.columns:
-                df["name"] = df.apply(
-                    lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
-                    if row.get("name_en")
-                    else row.get("name_cn", row.get("symbol")),
-                    axis=1,
-                )
-            if "support_level" not in df.columns and "support_level_primary" in df.columns:
-                df["support_level"] = df["support_level_primary"]
-            if "date" in df.columns:
-                df = df.sort_values("date")
-            return df
+        if "support_level" not in df.columns and "support_level_primary" in df.columns:
+            df["support_level"] = df["support_level_primary"]
+        if "date" in df.columns:
+            df = df.sort_values("date")
+        return df
 
     # Fallback to repo CSV
     fallback = pd.read_csv(HISTORY_PATH)
@@ -440,8 +516,51 @@ def load_analyst() -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def render_equity_dashboard() -> None:
-    st.title("OpenBB 三个月表现仪表盘")
+@st.cache_data
+def load_crypto_supports() -> pd.DataFrame:
+    df = fetch_supabase_table("crypto_supports")
+    if df is None or df.empty:
+        if CRYPTO_CSV_PATH.exists():
+            df = pd.read_csv(CRYPTO_CSV_PATH)
+        else:
+            return pd.DataFrame()
+    for col in [
+        "last_price",
+        "ma50",
+        "ma200",
+        "support_strength",
+        "fib_38_2",
+        "fib_50",
+        "fib_61_8",
+        "swing_low",
+        "swing_high",
+        "swing_range",
+        "pct_change_7d",
+        "pct_change_30d",
+        "distance_ma50_pct",
+        "distance_ma200_pct",
+        "volume_latest",
+        "volume_ma20",
+        "volume_spike_ratio",
+        "obv",
+        "vpt",
+        "vwap",
+        "ad_line",
+        "volume_avg_30d",
+        "mvrv",
+        "lth_cost_basis",
+        "exchange_netflow",
+        "asopr",
+        "funding_rate",
+        "fear_greed",
+        "stablecoin_exchange_balance",
+    ]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df
+
+
+def render_equity_content() -> None:
     st.caption("数据来源：Supabase（`equity_metrics` / `equity_metrics_history` / `holdings`）")
     with st.expander("指标说明"):
         st.markdown(
@@ -962,7 +1081,17 @@ def render_equity_dashboard() -> None:
         perc_bar.update_yaxes(tickformat=".0%")
         st.plotly_chart(perc_bar, width="stretch")
 
+    render_volume_section(filtered)
     render_holdings_panel(summary, history)
+
+
+def render_equity_dashboard() -> None:
+    st.title("OpenBB 三个月表现仪表盘")
+    equity_tab, crypto_tab = st.tabs(["股票面板", "加密面板"])
+    with equity_tab:
+        render_equity_content()
+    with crypto_tab:
+        render_crypto_dashboard()
 
 def render_holdings_panel(summary: pd.DataFrame, history: pd.DataFrame) -> None:
     st.subheader("持仓与风控模块")
@@ -1064,6 +1193,102 @@ def render_holdings_panel(summary: pd.DataFrame, history: pd.DataFrame) -> None:
                 st.success(f"{symbol} 已删除")
                 st.experimental_rerun()
 
+
+def render_crypto_dashboard() -> None:
+    st.subheader("加密资产支撑面板")
+    crypto_df = load_crypto_supports()
+    if crypto_df.empty:
+        st.info("暂无加密资产数据。请先运行 `python3 fetch_crypto_supports.py` 并同步到 Supabase。")
+        return
+    crypto_df["symbol"] = crypto_df["symbol"].str.upper()
+    options = sorted(crypto_df["symbol"].unique())
+    selected = st.multiselect("选择资产", options, default=options)
+    if selected:
+        crypto_df = crypto_df[crypto_df["symbol"].isin(selected)]
+    display_cols = [
+        "symbol",
+        "name",
+        "last_price",
+        "pct_change_7d",
+        "pct_change_30d",
+        "volume_spike_ratio",
+        "obv",
+        "vpt",
+        "vwap",
+        "support_strength",
+        "fear_greed",
+        "funding_rate",
+        "recent_supports",
+    ]
+    missing = [c for c in display_cols if c not in crypto_df.columns]
+    for col in missing:
+        crypto_df[col] = np.nan
+    # Price summary cards
+    price_cols = st.columns(min(len(crypto_df), 4) or 1)
+    for idx, (_, row) in enumerate(crypto_df.head(4).iterrows()):
+        delta = row.get("pct_change_7d")
+        delta_str = f"{delta:.2f}%" if pd.notna(delta) else "N/A"
+        price_cols[idx % len(price_cols)].metric(
+            f"{row['symbol']} 现价",
+            f"${row['last_price']:.2f}" if pd.notna(row["last_price"]) else "N/A",
+            f"7日 {delta_str}",
+        )
+
+    st.dataframe(
+        crypto_df[display_cols].rename(
+            columns={
+                "symbol": "代码",
+                "name": "资产",
+                "last_price": "现价(USD)",
+                "pct_change_7d": "7日涨跌%",
+                "pct_change_30d": "30日涨跌%",
+                "volume_spike_ratio": "成交量突增比率",
+                "support_strength": "支撑强度",
+                "fear_greed": "恐贪指数",
+                "funding_rate": "资金费率",
+                "recent_supports": "近期支撑",
+            }
+        ),
+        use_container_width=True,
+        column_config={
+            "7日涨跌%": st.column_config.NumberColumn("7日涨跌%", format="%.2f"),
+            "30日涨跌%": st.column_config.NumberColumn("30日涨跌%", format="%.2f"),
+            "成交量突增比率": st.column_config.ProgressColumn(
+                "成交量突增比率", min_value=0.0, max_value=3.0, format="%.2f"
+            ),
+        },
+    )
+    if {"volume_spike_ratio", "symbol"}.issubset(crypto_df.columns):
+        ratio_fig = px.bar(
+            crypto_df,
+            x="symbol",
+            y="volume_spike_ratio",
+            title="加密资产成交量突增比率",
+            color_discrete_sequence=THEME_COLORS,
+        )
+        st.plotly_chart(ratio_fig, use_container_width=True)
+    symbols = crypto_df["symbol"].unique().tolist()
+    if {"symbol", "last_price", "ma50", "ma200"}.issubset(crypto_df.columns):
+        st.markdown("### 现价与均线对比")
+        rows = [symbols[i : i + 2] for i in range(0, len(symbols), 2)]
+        for row_symbols in rows:
+            cols = st.columns(len(row_symbols))
+            for col, symbol in zip(cols, row_symbols):
+                subset = crypto_df[crypto_df["symbol"] == symbol].iloc[0]
+                table_df = pd.DataFrame(
+                    {
+                        "指标": ["现价(USD)", "MA50", "MA200", "距MA50%", "距MA200%"],
+                        "数值": [
+                            f"{subset['last_price']:.2f}" if pd.notna(subset["last_price"]) else "N/A",
+                            f"{subset['ma50']:.2f}" if pd.notna(subset["ma50"]) else "N/A",
+                            f"{subset['ma200']:.2f}" if pd.notna(subset["ma200"]) else "N/A",
+                            f"{subset['distance_ma50_pct']:.2f}%" if pd.notna(subset["distance_ma50_pct"]) else "N/A",
+                            f"{subset['distance_ma200_pct']:.2f}%" if pd.notna(subset["distance_ma200_pct"]) else "N/A",
+                        ],
+                    }
+                )
+                col.markdown(f"**{symbol}**")
+                col.table(table_df)
 
 
 

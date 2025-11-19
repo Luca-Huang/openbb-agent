@@ -87,6 +87,9 @@ HISTORY_UPLOAD_COLUMNS = [
     "name_en",
     "name_cn",
     "market",
+    "open",
+    "high",
+    "low",
     "close",
     "close_norm",
     "close_percentile",
@@ -101,6 +104,13 @@ HISTORY_UPLOAD_COLUMNS = [
     "fib_38_2",
     "fib_50",
     "fib_61_8",
+    "volume",
+    "volume_ma20",
+    "volume_spike_ratio",
+    "obv",
+    "vpt",
+    "vwap",
+    "ad_line",
 ]
 
 def load_equity_universe(config_path: Path = EQUITY_CONFIG_PATH) -> List[Dict[str, str]]:
@@ -303,10 +313,11 @@ def fetch_history_fmp(symbol: str, start: date, end: date) -> pd.DataFrame:
     df = df.sort_values("date")
     if "price" in df.columns and "close" not in df.columns:
         df["close"] = df["price"]
-    if "open" not in df.columns:
-        df["open"] = df["close"]
+    for col in ["open", "high", "low", "volume"]:
+        if col not in df.columns:
+            df[col] = np.nan
     df["close_norm"] = df["close"] / df["close"].iloc[0]
-    return df[["date", "open", "close"]].assign(close_norm=df["close_norm"])
+    return df[["date", "open", "high", "low", "close", "volume", "close_norm"]]
 
 
 def fetch_history(stock: Dict[str, str], start: date, end: date) -> pd.DataFrame:
@@ -320,10 +331,22 @@ def fetch_history(stock: Dict[str, str], start: date, end: date) -> pd.DataFrame
     df = ticker.history(start=start.isoformat(), end=end.isoformat(), auto_adjust=False)
     if df.empty:
         raise RuntimeError(f"No yfinance data for {stock['symbol']}")
-    df = df.reset_index().rename(columns={"Date": "date", "Open": "open", "Close": "close"})
+    df = df.reset_index().rename(
+        columns={
+            "Date": "date",
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+        }
+    )
     df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+    for col in ["high", "low", "volume"]:
+        if col not in df.columns:
+            df[col] = np.nan
     df["close_norm"] = df["close"] / df["close"].iloc[0]
-    return df[["date", "open", "close", "close_norm"]]
+    return df[["date", "open", "high", "low", "close", "volume", "close_norm"]]
 
 
 def add_close_percentile(short_df: pd.DataFrame, long_df: pd.DataFrame) -> pd.DataFrame:
@@ -377,6 +400,39 @@ def add_trend_indicators(df: pd.DataFrame) -> pd.DataFrame:
     enriched["fib_38_2"] = rolling_high - diff * 0.382
     enriched["fib_50"] = rolling_high - diff * 0.5
     enriched["fib_61_8"] = rolling_high - diff * 0.618
+    return enriched
+
+
+def add_volume_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    enriched = df.sort_values("date").copy()
+    enriched["volume"] = pd.to_numeric(enriched.get("volume"), errors="coerce")
+    enriched["volume_ma20"] = enriched["volume"].rolling(window=20, min_periods=1).mean()
+    enriched["volume_spike_ratio"] = enriched["volume"] / enriched["volume_ma20"]
+
+    close_diff = enriched["close"].diff()
+    direction = np.sign(close_diff).fillna(0.0)
+    obv = (direction * enriched["volume"].fillna(0.0)).cumsum()
+    enriched["obv"] = obv
+
+    pct_change = enriched["close"].pct_change().fillna(0.0)
+    enriched["vpt"] = (pct_change * enriched["volume"].fillna(0.0)).cumsum()
+
+    typical_price = enriched["close"]
+    if {"high", "low"}.issubset(enriched.columns):
+        typical_price = (enriched["high"] + enriched["low"] + enriched["close"]) / 3
+    cum_vol = enriched["volume"].fillna(0.0).cumsum()
+    cum_tp = (typical_price * enriched["volume"].fillna(0.0)).cumsum()
+    enriched["vwap"] = np.where(cum_vol > 0, cum_tp / cum_vol, np.nan)
+
+    if {"high", "low"}.issubset(enriched.columns):
+        money_flow_mult = (
+            ((enriched["close"] - enriched["low"]) - (enriched["high"] - enriched["close"]))
+            / (enriched["high"] - enriched["low"]).replace(0, np.nan)
+        )
+        money_flow_mult = money_flow_mult.fillna(0.0)
+    else:
+        money_flow_mult = pd.Series(0.0, index=enriched.index)
+    enriched["ad_line"] = (money_flow_mult * enriched["volume"].fillna(0.0)).cumsum()
     return enriched
 
 
@@ -862,6 +918,7 @@ def main() -> None:
         history["symbol"] = stock["symbol"]
         history = calculate_support_levels(history)
         history = add_trend_indicators(history)
+        history = add_volume_indicators(history)
         combined.append(
             history[
                 [
@@ -871,7 +928,11 @@ def main() -> None:
                     "name_en",
                     "name_cn",
                     "market",
+                    "open",
+                    "high",
+                    "low",
                     "close",
+                    "volume",
                     "support_level",
                     "support_level_secondary",
                     "close_norm",
@@ -885,6 +946,12 @@ def main() -> None:
                     "fib_38_2",
                     "fib_50",
                     "fib_61_8",
+                    "volume_ma20",
+                    "volume_spike_ratio",
+                    "obv",
+                    "vpt",
+                    "vwap",
+                    "ad_line",
                 ]
             ].copy()
         )

@@ -76,6 +76,13 @@ CRYPTO_UPLOAD_COLUMNS = [
     "pct_change_30d",
     "distance_ma50_pct",
     "distance_ma200_pct",
+    "volume_latest",
+    "volume_ma20",
+    "volume_spike_ratio",
+    "obv",
+    "vpt",
+    "vwap",
+    "ad_line",
     "volume_avg_30d",
     "llama_chain",
     "llama_chain_tvl",
@@ -185,6 +192,9 @@ def fetch_binance_klines(symbol: str, days: int) -> Optional[pd.DataFrame]:
             {
                 "date": pd.to_datetime(entry[0], unit="ms"),
                 "price": float(entry[4]),  # 收盘价
+                "close": float(entry[4]),
+                "high": float(entry[2]),
+                "low": float(entry[3]),
                 "volume": float(entry[5]),
             }
         )
@@ -328,6 +338,46 @@ def compute_rsi(series: pd.Series, period: int = 14) -> pd.Series:
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
+
+
+def compute_volume_indicators(price: pd.Series, volume: pd.Series, high: Optional[pd.Series] = None, low: Optional[pd.Series] = None) -> Dict[str, float]:
+    df = pd.DataFrame({"close": price, "volume": volume}).sort_index()
+    if high is not None:
+        df["high"] = high.reindex(df.index)
+    if low is not None:
+        df["low"] = low.reindex(df.index)
+    df["volume"] = pd.to_numeric(df["volume"], errors="coerce")
+    df["volume_ma20"] = df["volume"].rolling(window=20, min_periods=1).mean()
+    latest_volume = float(df["volume"].iloc[-1]) if not df["volume"].empty else float("nan")
+    volume_ma20 = float(df["volume_ma20"].iloc[-1]) if not df["volume_ma20"].empty else float("nan")
+    spike_ratio = (
+        float(latest_volume / volume_ma20) if volume_ma20 and not np.isnan(volume_ma20) else float("nan")
+    )
+    direction = np.sign(df["close"].diff()).fillna(0.0)
+    obv_series = (direction * df["volume"].fillna(0.0)).cumsum()
+    vpt_series = (df["close"].pct_change().fillna(0.0) * df["volume"].fillna(0.0)).cumsum()
+    if {"high", "low"}.issubset(df.columns):
+        typical_price = (df["high"] + df["low"] + df["close"]) / 3
+        money_flow_mult = (
+            ((df["close"] - df["low"]) - (df["high"] - df["close"]))
+            / (df["high"] - df["low"]).replace(0, np.nan)
+        ).fillna(0.0)
+    else:
+        typical_price = df["close"]
+        money_flow_mult = pd.Series(0.0, index=df.index)
+    cum_vol = df["volume"].fillna(0.0).cumsum()
+    cum_tp_vol = (typical_price * df["volume"].fillna(0.0)).cumsum()
+    vwap_series = np.where(cum_vol > 0, cum_tp_vol / cum_vol, np.nan)
+    ad_line_series = (money_flow_mult * df["volume"].fillna(0.0)).cumsum()
+    return {
+        "volume_latest": latest_volume,
+        "volume_ma20": volume_ma20,
+        "volume_spike_ratio": spike_ratio,
+        "obv": float(obv_series.iloc[-1]) if not obv_series.empty else float("nan"),
+        "vpt": float(vpt_series.iloc[-1]) if not vpt_series.empty else float("nan"),
+        "vwap": float(vwap_series[-1]) if len(vwap_series) else float("nan"),
+        "ad_line": float(ad_line_series.iloc[-1]) if not ad_line_series.empty else float("nan"),
+    }
 
 
 def detect_recent_supports(series: pd.Series, window: int = 7, top_n: int = 3) -> List[Dict[str, Any]]:
@@ -521,6 +571,16 @@ def main() -> None:
         df.set_index("date", inplace=True)
         closes = pd.Series(np.asarray(df["price"], dtype=float).reshape(-1), index=df.index)
         volumes = pd.Series(np.asarray(df["volume"], dtype=float).reshape(-1), index=df.index)
+        highs = (
+            pd.Series(np.asarray(df["high"], dtype=float).reshape(-1), index=df.index)
+            if "high" in df
+            else pd.Series(np.nan, index=df.index)
+        )
+        lows = (
+            pd.Series(np.asarray(df["low"], dtype=float).reshape(-1), index=df.index)
+            if "low" in df
+            else pd.Series(np.nan, index=df.index)
+        )
 
         rsi_series = compute_rsi(closes)
         latest_rsi = float(rsi_series.iloc[-1])
@@ -538,6 +598,7 @@ def main() -> None:
         distance_ma50 = percent_diff(last_price, ma50)
         distance_ma200 = percent_diff(last_price, ma200)
         volume_avg_30d = float(volumes.tail(30).mean()) if not volumes.empty else float("nan")
+        volume_signals = compute_volume_indicators(closes, volumes, highs, lows)
         swing_range = swing_high - swing_low
 
         onchain_snapshot: Dict[str, Any] = {}
@@ -581,6 +642,13 @@ def main() -> None:
             "pct_change_30d": pct_change_30d,
             "distance_ma50_pct": distance_ma50,
             "distance_ma200_pct": distance_ma200,
+            "volume_latest": volume_signals["volume_latest"],
+            "volume_ma20": volume_signals["volume_ma20"],
+            "volume_spike_ratio": volume_signals["volume_spike_ratio"],
+            "obv": volume_signals["obv"],
+            "vpt": volume_signals["vpt"],
+            "vwap": volume_signals["vwap"],
+            "ad_line": volume_signals["ad_line"],
             "volume_avg_30d": volume_avg_30d,
             "onchain": onchain_snapshot,
             "sentiment": sentiment_snapshot,
@@ -616,6 +684,13 @@ def main() -> None:
                 "pct_change_30d": pct_change_30d,
                 "distance_ma50_pct": distance_ma50,
                 "distance_ma200_pct": distance_ma200,
+                "volume_latest": volume_signals["volume_latest"],
+                "volume_ma20": volume_signals["volume_ma20"],
+                "volume_spike_ratio": volume_signals["volume_spike_ratio"],
+                "obv": volume_signals["obv"],
+                "vpt": volume_signals["vpt"],
+                "vwap": volume_signals["vwap"],
+                "ad_line": volume_signals["ad_line"],
                 "volume_avg_30d": volume_avg_30d,
                 "llama_chain": llama_metrics.get("llama_chain"),
                 "llama_chain_tvl": llama_metrics.get("llama_chain_tvl"),
