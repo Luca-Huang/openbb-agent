@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from uuid import uuid4
 import html
 import json
 import os
@@ -74,103 +75,236 @@ SYMBOL_REASON = {row["symbol"]: row["reason"] for row in AI_STACK_INFO}
 
 CUSTOM_CSS = """
 <style>
-body {
-    background-color: #f5f6fa;
-    font-family: "Inter", "Helvetica Neue", sans-serif;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root {
+    --bg-base: #f5f6fb;
+    --bg-card: #ffffff;
+    --text-main: #0f172a;
+    --text-muted: #6b7280;
+    --border-soft: 1px solid rgba(15, 23, 42, 0.08);
+    --shadow-soft: 0 20px 45px rgba(15, 23, 42, 0.08);
+    --brand-blue: #2563eb;
+    --brand-green: #22c55e;
+    --brand-orange: #fb923c;
+}
+.stApp, body {
+    background: var(--bg-base);
+    font-family: "Inter", sans-serif;
+    color: var(--text-main);
+}
+.main > div {
+    padding-top: 1rem;
+}
+.nav-bar {
+    background: var(--bg-card);
+    border-radius: 20px;
+    padding: 18px 30px;
+    border: var(--border-soft);
+    box-shadow: var(--shadow-soft);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+.nav-brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+.brand-icon {
+    width: 46px;
+    height: 46px;
+    border-radius: 16px;
+    background: radial-gradient(circle at 25% 25%, #8fc5ff, #2563eb);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    color: white;
+    box-shadow: inset 0 1px 6px rgba(255,255,255,0.6);
+}
+.nav-tabs {
+    display: inline-flex;
+    gap: 10px;
+}
+.tab-pill {
+    padding: 6px 18px;
+    border-radius: 999px;
+    border: 1px solid rgba(15,23,42,0.12);
+    font-weight: 600;
+    color: var(--text-muted);
+}
+.tab-pill.active {
+    background: rgba(37,99,235,0.12);
+    color: var(--brand-blue);
+    border-color: transparent;
+}
+.live-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    background: rgba(34,197,94,0.15);
+    color: var(--brand-green);
+    border-radius: 999px;
+    font-weight: 600;
+}
+.live-indicator span {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--brand-green);
+    box-shadow: 0 0 5px rgba(34,197,94,0.6);
+}
+.section-heading {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 1rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
 }
 .metric-card {
-    background: #ffffff;
-    padding: 16px;
-    border-radius: 16px;
-    box-shadow: 0 8px 16px rgba(20, 63, 107, 0.08);
-    border: 1px solid #e6ebf3;
-    color: #143f6b;
+    background: var(--bg-card);
+    padding: 26px;
+    border-radius: 18px;
+    border: var(--border-soft);
+    box-shadow: var(--shadow-soft);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    margin-bottom: 16px;
+    min-height: 140px;
+}
+.metric-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 25px 50px rgba(15, 23, 42, 0.15);
 }
 .metric-card h2 {
-    color: #0d2e50;
-    margin: 4px 0 0;
+    color: #475569;
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
 }
 .metric-card p {
-    color: #5b6b80;
-    margin: 0 0 4px;
-    font-size: 0.95rem;
+    color: var(--text-main);
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin: 0;
 }
 .badge {
     border-radius: 999px;
     padding: 4px 12px;
-    font-size: 0.85rem;
-    font-weight: 600;
-    display: inline-block;
-}
-.badge-green { background: #e8f8f5; color: #117a65; }
-.badge-yellow { background: #fcf3cf; color: #9c640c; }
-.badge-gray { background: #ecf0f1; color: #566573; }
-.badge-red { background: #fdecea; color: #c0392b; }
-.badge-blue { background: #e3f2fd; color: #0d47a1; }
-.badge-purple { background: #f3e5f5; color: #6a1b9a; }
-.tag {
     font-size: 0.78rem;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #eef2ff;
-    color: #4338ca;
-    display: inline-block;
-}
-.table-wrapper {
-    margin-top: 12px;
-    overflow-x: auto;
-    border-radius: 18px;
-    box-shadow: 0 15px 35px rgba(20, 63, 107, 0.08);
-}
-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: #fff;
-    border-radius: 16px;
-    overflow: hidden;
-    box-shadow: 0 8px 20px rgba(20,63,107,0.05);
-}
-th, td {
-    padding: 10px 12px;
-    border-bottom: 1px solid #eef2f7;
-    text-align: center;
-    color: #1f2a37;
-    font-size: 0.92rem;
-}
-table thead th {
-    position: sticky;
-    top: 0;
-    z-index: 2;
-}
-table tbody tr:nth-child(even) {
-    background: #fbfdff;
-}
-th {
-    background: #f0f4fb;
-    color: #143f6b;
     font-weight: 600;
+    border: 1px solid transparent;
 }
-tr:hover {
-    background: #f8fbff;
+.badge-green { background: #ecfdf5; color: #059669; border-color: #bbf7d0; }
+.badge-red { background: #fef2f2; color: #dc2626; border-color: #fecdd3; }
+.badge-blue { background: #eef2ff; color: #2563eb; border-color: #c7d2fe; }
+.badge-yellow { background: #fffbeb; color: #d97706; border-color: #fde68a; }
+.badge-gray { background: #f1f5f9; color: #475569; border-color: #e2e8f0; }
+.tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+    border-radius: 999px;
+    background: rgba(148,163,184,0.15);
+    color: #475569;
+    font-size: 0.75rem;
+    border: 1px solid rgba(148,163,184,0.25);
 }
-button {
-    border: none;
-    background: #143f6b;
-    color: #fff;
-    padding: 4px 10px;
-    border-radius: 8px;
-    cursor: pointer;
+.chip-row {
+    background: var(--bg-card);
+    border-radius: 18px;
+    padding: 18px 22px;
+    border: var(--border-soft);
+    box-shadow: var(--shadow-soft);
+    margin: 10px 0 22px;
 }
-.info-btn {
-    border: 1px solid #dbe4f3;
-    background: #fff;
-    color: #143f6b;
-    transition: all 0.2s ease;
+.chip-row h4 {
+    margin: 0 0 6px;
+    font-size: 0.95rem;
+    color: var(--text-muted);
+}
+.chip-row .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    background: #f8fafc;
+    margin: 4px 10px 4px 0;
     font-size: 0.85rem;
+    color: #0f172a;
 }
-.info-btn:hover {
-    background: #143f6b;
-    color: #fff;
+.chip-row .chip-label {
+    background: rgba(37,99,235,0.08);
+    border-color: rgba(37,99,235,0.2);
+    color: var(--brand-blue);
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.chip-row .chip.ghost {
+    background: transparent;
+    border-style: dashed;
+    color: #94a3b8;
+}
+.highlight-board {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px;
+    margin-bottom: 10px;
+}
+.highlight-item {
+    background: linear-gradient(165deg, #ffffff, #f0f4ff);
+    border-radius: 16px;
+    border: 1px solid rgba(37,99,235,0.15);
+    padding: 18px;
+    box-shadow: 0 12px 30px rgba(37,99,235,0.08);
+}
+.highlight-symbol {
+    font-weight: 700;
+    font-size: 1.1rem;
+    letter-spacing: 0.04em;
+}
+.highlight-metrics {
+    font-variant-numeric: tabular-nums;
+    color: #475569;
+    margin-top: 4px;
+}
+.table-card {
+    background: var(--bg-card);
+    border-radius: 22px;
+    padding: 12px;
+    border: var(--border-soft);
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 20px;
+}
+.subtle-card {
+    background: var(--bg-card);
+    border-radius: 16px;
+    padding: 18px;
+    border: var(--border-soft);
+    box-shadow: var(--shadow-soft);
+    margin-bottom: 20px;
+}
+.stTabs [role="tablist"] {
+    border-bottom: var(--border-soft);
+    padding-bottom: 0.5rem;
+}
+.stTabs [role="tab"] {
+    font-weight: 600;
+    padding: 0.6rem 1rem;
+}
+.dataframe {
+    border-radius: 16px !important;
+    overflow: hidden;
+}
+.stDataFrame div[role="table"] {
+    border-radius: 16px;
+    border: var(--border-soft);
+}
+.stDataFrame [data-testid="StyledTable"] {
+    border-radius: 16px;
 }
 </style>
 """
@@ -264,6 +398,29 @@ def bool_chip(value: bool | None) -> str:
         return "N/A"
     return "✅" if bool(value) else "—"
 
+def render_page_nav(active: str = "equity") -> None:
+    equity_class = "tab-pill active" if active == "equity" else "tab-pill"
+    crypto_class = "tab-pill active" if active == "crypto" else "tab-pill"
+    nav_html = f"""
+    <div class="nav-bar">
+        <div class="nav-brand">
+            <div class="brand-icon">VA</div>
+            <div>
+                <strong>价值锚点 Value Anchor</strong><br/>
+                <span style="font-size:0.85rem;color:var(--text-muted);">Equity & Crypto Monitor</span>
+            </div>
+        </div>
+        <div class="nav-tabs">
+            <div class="{equity_class}">股票资产 (Equity)</div>
+            <div class="{crypto_class}">加密资产 (Crypto)</div>
+        </div>
+        <div class="live-indicator">
+            <span></span> Live Feed
+        </div>
+    </div>
+    """
+    st.markdown(nav_html, unsafe_allow_html=True)
+
 
 def render_overview_cards(summary_df: pd.DataFrame, history_df: pd.DataFrame) -> None:
     total_watchlist = len(summary_df)
@@ -311,6 +468,134 @@ def render_overview_cards(summary_df: pd.DataFrame, history_df: pd.DataFrame) ->
         </div>
         """
         col.markdown(card_html, unsafe_allow_html=True)
+
+
+def render_active_filters(
+    markets: list[str],
+    categories: list[str],
+    entry_status: list[str],
+    keyword: str,
+) -> None:
+    def build_group(title: str, items: list[str]) -> str:
+        if not items:
+            return ""
+        chips = "".join(f"<span class='chip'>{html.escape(item)}</span>" for item in items)
+        return f"<div><span class='chip chip-label'>{title}</span>{chips}</div>"
+
+    keyword = (keyword or "").strip()
+    html_parts = ["<div class='chip-row'><h4>当前筛选</h4>"]
+    html_parts.append(build_group("市场", markets))
+    html_parts.append(build_group("产业链", categories))
+    html_parts.append(build_group("入场结论", entry_status))
+    if keyword:
+        html_parts.append(
+            f"<div><span class='chip chip-label'>关键字</span><span class='chip'>{html.escape(keyword)}</span></div>"
+        )
+    if len("".join(html_parts)) <= len("<div class='chip-row'><h4>当前筛选</h4></div>"):
+        html_parts.append("<span class='chip ghost'>未选择任何筛选条件</span>")
+    html_parts.append("</div>")
+    st.markdown("".join(html_parts), unsafe_allow_html=True)
+
+
+def render_highlight_section(summary: pd.DataFrame) -> None:
+    if summary.empty:
+        return
+    summary = summary.copy()
+    entry_rank = {"建议入场": 0, "可评估入场": 1}
+    summary["entry_rank"] = summary.get("entry_recommendation", "").map(entry_rank).fillna(2)
+    leaders = summary.sort_values(["entry_rank", "value_score"], ascending=[True, False]).head(4)
+    if leaders.empty:
+        return
+    cards = []
+    for _, row in leaders.iterrows():
+        symbol = row.get("symbol", "--")
+        name = row.get("name_cn") or row.get("name_en") or ""
+        verdict = row.get("entry_recommendation", "待观察")
+        score = row.get("value_score")
+        support = row.get("support_level_primary")
+        pct = row.get("end_close_percentile")
+        cards.append(
+            f"""
+            <div class='highlight-item'>
+                <div class='highlight-symbol'>{html.escape(symbol)}</div>
+                <div style='color:#94a3b8;font-size:0.85rem;'>{html.escape(name)}</div>
+                <div class='highlight-metrics'>得分 {fmt_number(score,1)} · 支撑位 {fmt_number(support,2)} · 分位 {fmt_percent(pct)}</div>
+                <div style='margin-top:8px;'>{badge(verdict, ENTRY_BADGE)}</div>
+            </div>
+            """
+        )
+    st.markdown("<div class='highlight-board'>" + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+
+def render_fundamental_section(summary: pd.DataFrame) -> None:
+    sample = summary.copy()
+    if sample.empty:
+        st.info("暂无基础数据")
+        return
+    sample["price"] = sample.get("end_close")
+    sample["fair_value_est"] = sample.get("support_level_primary", np.nan) * 1.15
+    sample["fair_value_est"].fillna(sample["price"], inplace=True)
+    sample["margin_of_safety"] = (
+        (sample["fair_value_est"] - sample["price"]) / sample["price"]
+    ) * 100
+    display_cols = [
+        "symbol",
+        "theme_category",
+        "price",
+        "fair_value_est",
+        "margin_of_safety",
+        "end_pe",
+        "entry_recommendation",
+    ]
+    for col in display_cols:
+        if col not in sample.columns:
+            sample[col] = np.nan
+    sample = sample.sort_values("margin_of_safety", ascending=False).head(12)
+    st.dataframe(
+        sample[display_cols].rename(
+            columns={
+                "symbol": "Symbol",
+                "theme_category": "Sector",
+                "price": "Price",
+                "fair_value_est": "Fair Value",
+                "margin_of_safety": "Margin of Safety (%)",
+                "end_pe": "P/E",
+                "entry_recommendation": "Verdict",
+            }
+        ),
+        use_container_width=True,
+    )
+
+
+def render_sector_gap(summary: pd.DataFrame) -> None:
+    if "theme_category" not in summary.columns or summary.empty:
+        return
+    sector = (
+        summary.groupby("theme_category")["value_score"]
+        .agg(["mean", "count", "max"])
+        .reset_index()
+        .rename(
+            columns={
+                "theme_category": "Sector",
+                "mean": "Avg Score",
+                "count": "Companies",
+                "max": "Top Score",
+            }
+        )
+    )
+    st.dataframe(sector, use_container_width=True)
+    fig = px.bar(
+        sector,
+        x="Sector",
+        y="Avg Score",
+        color="Avg Score",
+        color_continuous_scale="Greens",
+    )
+    st.plotly_chart(
+        fig,
+        use_container_width=True,
+        key=f"sector-gap-chart-{uuid4()}",
+    )
 
 
 def fetch_supabase_table(
@@ -717,7 +1002,9 @@ def render_equity_content() -> None:
         history["theme_category"] = history["symbol"].map(CATEGORY_MAP).fillna("其他")
     else:
         history["theme_category"] = "Unknown"
-    filter_col1, filter_col2, filter_col3 = st.columns([1.5, 1.5, 1])
+
+    st.markdown("<div class='subtle-card'>", unsafe_allow_html=True)
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns([1.2, 1.2, 1, 1])
     market_options = sorted(summary["market"].dropna().unique())
     with filter_col1:
         selected_markets = st.multiselect(
@@ -725,9 +1012,13 @@ def render_equity_content() -> None:
             market_options,
             default=market_options,
         )
-    summary = summary[summary["market"].isin(selected_markets)]
-    history = history[history["market"].isin(selected_markets)]
-    history = align_history_to_summary(history, summary)
+    if selected_markets:
+        summary = summary[summary["market"].isin(selected_markets)]
+        history = history[history["market"].isin(selected_markets)]
+    else:
+        summary = summary.iloc[0:0]
+        history = history.iloc[0:0]
+
     category_options = sorted(summary["theme_category"].dropna().unique())
     with filter_col2:
         selected_categories = st.multiselect(
@@ -741,18 +1032,24 @@ def render_equity_content() -> None:
 
     entry_series = summary["entry_recommendation"] if "entry_recommendation" in summary.columns else pd.Series(dtype=str)
     entry_options = sorted(entry_series.dropna().unique().tolist())
-    if entry_options:
-        with filter_col3:
+    selected_entry: list[str] = entry_options.copy()
+    with filter_col3:
+        if entry_options:
             selected_entry = st.multiselect(
                 "入场结论",
                 entry_options,
                 default=entry_options,
             )
-        if selected_entry:
-            summary = summary[summary["entry_recommendation"].isin(selected_entry)]
-            history = align_history_to_summary(history, summary)
+        else:
+            st.caption("暂无入场分类")
+    if selected_entry:
+        summary = summary[summary["entry_recommendation"].isin(selected_entry)]
+        history = align_history_to_summary(history, summary)
 
-    search_kw = st.text_input("🔍 搜索公司/代码", placeholder="输入公司名称或股票代码")
+    with filter_col4:
+        search_kw = st.text_input("🔍 搜索公司/代码", placeholder="输入公司名称或股票代码")
+    st.markdown("</div>", unsafe_allow_html=True)
+
     if search_kw:
         keyword = search_kw.strip().lower()
         if keyword:
@@ -764,12 +1061,16 @@ def render_equity_content() -> None:
                 summary = summary[mask]
                 history = align_history_to_summary(history, summary)
 
+    render_active_filters(selected_markets, selected_categories, selected_entry if selected_entry else [], search_kw or "")
+
     if summary.empty or history.empty:
         st.warning("所选条件暂无数据")
         return
 
     if "value_score" in summary.columns:
         summary = summary.sort_values("value_score", ascending=False)
+
+    render_highlight_section(summary)
 
     st.subheader("产业链概览")
     cat_summary = (
@@ -785,9 +1086,10 @@ def render_equity_content() -> None:
     cat_summary["top_score"] = cat_summary["top_score"].round(1)
     st.dataframe(cat_summary.rename(columns={"theme_category": "分类", "company_count": "公司数", "avg_score": "平均得分", "top_score": "最高得分"}), use_container_width=True)
 
-    if category_options:
-        category_tabs = st.tabs(category_options)
-        for cat, tab in zip(category_options, category_tabs):
+    filtered_categories = sorted(summary["theme_category"].dropna().unique())
+    if filtered_categories:
+        category_tabs = st.tabs(filtered_categories)
+        for cat, tab in zip(filtered_categories, category_tabs):
             subset_cat = summary[summary["theme_category"] == cat]
             if subset_cat.empty:
                 tab.info("暂无数据")
@@ -800,25 +1102,10 @@ def render_equity_content() -> None:
     else:
         st.info("当前筛选暂无分类数据")
 
-        summary = summary.sort_values("value_score", ascending=False)
-
-    # KPI cards
-    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
-    golden = summary[summary["value_score_tier"] == "黄金坑"]
-    silver = summary[summary["value_score_tier"] == "白银坑"]
-    avg_score = summary["value_score"].mean().round(1) if not summary.empty else 0
-    col_kpi1.markdown(
-        f"<div class='metric-card'><p>黄金坑数量</p><h2>{len(golden)}</h2></div>",
-        unsafe_allow_html=True,
-    )
-    col_kpi2.markdown(
-        f"<div class='metric-card'><p>白银坑数量</p><h2>{len(silver)}</h2></div>",
-        unsafe_allow_html=True,
-    )
-    col_kpi3.markdown(
-        f"<div class='metric-card'><p>平均价值得分</p><h2>{avg_score}</h2></div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("### 估值锚点")
+    render_fundamental_section(summary)
+    st.markdown("### 行业得分分布")
+    render_sector_gap(summary)
 
     st.subheader("入场信号 & 价值得分")
     tab_eval, tab_score = st.tabs(["入场信号", "价值得分拆解"])
@@ -1180,11 +1467,14 @@ def render_equity_content() -> None:
         perc_bar.update_yaxes(tickformat=".0%")
         st.plotly_chart(perc_bar, width="stretch")
 
+    render_fundamental_section(summary)
+    render_sector_gap(summary)
     render_volume_section(filtered)
     render_holdings_panel(summary_full, history_full)
 
 
 def render_equity_dashboard() -> None:
+    render_page_nav("equity")
     st.title("价值锚点监控仪表盘")
     equity_tab, crypto_tab = st.tabs(["股票面板", "加密面板"])
     with equity_tab:
