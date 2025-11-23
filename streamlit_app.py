@@ -791,12 +791,18 @@ def render_volume_section(history: pd.DataFrame) -> None:
 
 @st.cache_data
 def load_history() -> pd.DataFrame:
-    supabase_df = fetch_supabase_table("equity_metrics_history")
+    supabase_df = fetch_supabase_table(
+        "equity_metrics_history",
+        order="as_of_date.desc",
+        limit=5000,
+    )
     use_fallback = False
     if supabase_df is not None and not supabase_df.empty:
         df = supabase_df.rename(columns={"as_of_date": "date"})
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        # 只保留最近 5000 条后按日期排序，避免 1000 行默认上限导致拿到旧数据
+        df = df.sort_values("date", ascending=True)
     required_cols = [
         "open",
         "high",
@@ -1488,7 +1494,9 @@ def render_holdings_panel(summary: pd.DataFrame, history: pd.DataFrame) -> None:
     if summary.empty:
         st.info("暂无股票数据")
         return
-    symbol_options = sorted(summary["symbol"].dropna().unique())
+    # 去重后再建索引，避免同一 symbol 多行导致 Series/ndarray 异形
+    summary_unique = summary.drop_duplicates(subset=["symbol"], keep="last")
+    symbol_options = sorted(summary_unique["symbol"].dropna().unique())
     with st.form("holding_form"):
         c1, c2, c3, c4 = st.columns(4)
         selected_symbol = c1.selectbox("标的代码", symbol_options)
@@ -1521,7 +1529,7 @@ def render_holdings_panel(summary: pd.DataFrame, history: pd.DataFrame) -> None:
     latest_history = (
         history.sort_values("date").dropna(subset=["symbol"]).groupby("symbol").last()
     )
-    summary_lookup = summary.set_index("symbol")
+    summary_lookup = summary_unique.set_index("symbol")
     rows = []
 
     for _, row in holdings.iterrows():
@@ -1674,41 +1682,56 @@ def render_crypto_dashboard() -> None:
         st.plotly_chart(ratio_fig, use_container_width=True)
     symbols = crypto_df["symbol"].unique().tolist()
     if {"symbol", "last_price", "ma50", "ma200"}.issubset(crypto_df.columns):
-        st.markdown("### 现价与均线对比")
-        rows = [symbols[i : i + 2] for i in range(0, len(symbols), 2)]
-        for row_symbols in rows:
-            cols = st.columns(len(row_symbols))
-            for col, symbol in zip(cols, row_symbols):
-                subset = crypto_df[crypto_df["symbol"] == symbol].iloc[0]
-                table_df = pd.DataFrame(
-                    {
-                        "指标": ["现价(USD)", "MA50", "MA200", "距MA50%", "距MA200%"],
-                        "数值": [
-                            f"{subset['last_price']:.2f}" if pd.notna(subset["last_price"]) else "N/A",
-                            f"{subset['ma50']:.2f}" if pd.notna(subset["ma50"]) else "N/A",
-                            f"{subset['ma200']:.2f}" if pd.notna(subset["ma200"]) else "N/A",
-                            f"{subset['distance_ma50_pct']:.2f}%" if pd.notna(subset["distance_ma50_pct"]) else "N/A",
-                            f"{subset['distance_ma200_pct']:.2f}%" if pd.notna(subset["distance_ma200_pct"]) else "N/A",
-                        ],
-                    }
-                )
-                col.markdown(f"**{symbol}**")
-                col.table(table_df)
-        price_long = crypto_df.melt(
-            id_vars="symbol",
-            value_vars=["last_price", "ma50", "ma200"],
-            var_name="指标",
-            value_name="数值",
-        )
-        price_chart = px.bar(
-            price_long,
-            x="symbol",
-            y="数值",
-            color="指标",
-            barmode="group",
-            title="现价 / MA50 / MA200 对比",
-        )
-        st.plotly_chart(price_chart, use_container_width=True)
+        st.markdown("### 现价 / MA50 / MA200（按币种分表）")
+        # 按币种分成最多 4 个表，避免价格量级差异放在一个表里难以阅读
+        groups: dict[int, list[str]] = {}
+        for idx, sym in enumerate(sorted(symbols)):
+            groups.setdefault(idx % 4, []).append(sym)
+        cols = st.columns(min(4, len(groups)))
+        base_cols = [
+            "symbol",
+            "last_price",
+            "ma50",
+            "ma200",
+            "distance_ma50_pct",
+            "distance_ma200_pct",
+        ]
+        for slot, syms in groups.items():
+            subset = crypto_df[crypto_df["symbol"].isin(syms)][base_cols].copy()
+            subset = subset.rename(
+                columns={
+                    "symbol": "资产",
+                    "last_price": "现价(USD)",
+                    "ma50": "MA50",
+                    "ma200": "MA200",
+                    "distance_ma50_pct": "距MA50%",
+                    "distance_ma200_pct": "距MA200%",
+                }
+            )
+            subset["现价(USD)"] = subset["现价(USD)"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
+            subset["MA50"] = subset["MA50"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
+            subset["MA200"] = subset["MA200"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
+            subset["距MA50%"] = subset["距MA50%"].map(lambda v: f"{v:.2f}%" if pd.notna(v) else "N/A")
+            subset["距MA200%"] = subset["距MA200%"].map(lambda v: f"{v:.2f}%" if pd.notna(v) else "N/A")
+            cols[slot].dataframe(subset, hide_index=True, use_container_width=True)
+            # 图表展示：同组币种的现价/MA50/MA200 对比
+            numeric_subset = crypto_df[crypto_df["symbol"].isin(syms)][["symbol", "last_price", "ma50", "ma200"]]
+            price_long = numeric_subset.melt(
+                id_vars="symbol",
+                value_vars=["last_price", "ma50", "ma200"],
+                var_name="指标",
+                value_name="数值",
+            )
+            chart = px.bar(
+                price_long,
+                x="symbol",
+                y="数值",
+                color="指标",
+                barmode="group",
+                title="现价 / MA50 / MA200 对比",
+                color_discrete_sequence=THEME_COLORS,
+            )
+            cols[slot].plotly_chart(chart, use_container_width=True, key=f"crypto-ma-chart-{slot}")
 
 
 
