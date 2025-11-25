@@ -1,0 +1,3 @@
+[submodule "external/TradingAgents-CN"]
+	path = external/TradingAgents-CN
+	url = https://github.com/hsliuping/TradingAgents-CN
