@@ -1,11 +1,11 @@
 {
   "symbol": "BTC",
   "name": "比特币",
-  "last_price": 95820.07,
-  "ma50": 109959.94,
-  "ma200": 110441.5676,
+  "last_price": 91430.36,
+  "ma50": 109008.4474,
+  "ma200": 110381.7811,
   "ma_trend": "bearish",
-  "retrieved_at": "2025-11-17T09:34:08.791217+00:00",
+  "retrieved_at": "2025-11-19T10:26:28.342234+00:00",
   "price_source": "binance",
   "recent_supports": [
     {
@@ -23,39 +23,46 @@
   ],
   "support_strength": 3,
   "fibonacci_levels": {
-    "0%": 94261.44,
-    "38.2%": 105873.1322,
-    "50%": 109459.98999999999,
-    "61.8%": 113046.84779999999,
+    "0%": 91430.36,
+    "38.2%": 104123.52476,
+    "50%": 108044.45,
+    "61.8%": 111965.37524,
     "100%": 124658.54
   },
-  "swing_low": 94261.44,
+  "swing_low": 91430.36,
   "swing_high": 124658.54,
-  "swing_range": 30397.09999999999,
+  "swing_range": 33228.17999999999,
   "top_volume_nodes": [
     {
       "price_low": 95172.97125,
       "price_high": 97853.47750000001,
-      "volume": 1203210.9519620002
+      "volume": 1193703.3126320003
+    },
+    {
+      "price_low": 92492.465,
+      "price_high": 95172.97125,
+      "volume": 771366.238312
     },
     {
       "price_low": 103214.48999999999,
       "price_high": 105894.99625,
       "volume": 754585.1621549999
-    },
-    {
-      "price_low": 92492.465,
-      "price_high": 95172.97125,
-      "volume": 731531.0906219999
     }
   ],
-  "rsi14": 34.8158659078086,
+  "rsi14": 29.020405539360368,
   "rsi_bullish_divergence": true,
-  "pct_change_7d": -9.613198161362869,
-  "pct_change_30d": -10.60310578876653,
-  "distance_ma50_pct": -12.859110326906324,
-  "distance_ma200_pct": -13.239125374384841,
-  "volume_avg_30d": 22564.307813666663,
+  "pct_change_7d": -10.05761975604197,
+  "pct_change_30d": -17.28161477811556,
+  "distance_ma50_pct": -16.125435981578804,
+  "distance_ma200_pct": -17.16897563270067,
+  "volume_latest": 10519.83144,
+  "volume_ma20": 25999.968007,
+  "volume_spike_ratio": 0.40460939941032753,
+  "obv": 178379.70960700003,
+  "vpt": 21792.812330487293,
+  "vwap": 95689.33877408471,
+  "ad_line": 795137.8536216236,
+  "volume_avg_30d": 24077.36888133333,
   "onchain": {
     "mvrv": null,
     "lth_cost_basis": null,
@@ -64,16 +71,16 @@
     "utxo_realized_price_distribution": null
   },
   "sentiment": {
-    "fear_greed_value": "14",
+    "fear_greed_value": "15",
     "fear_greed_text": "Extreme Fear",
-    "funding_rate": 9.568e-05,
+    "funding_rate": 5.012e-05,
     "stablecoin_exchange_balance": null
   },
   "llama": {
     "llama_chain": "Bitcoin",
-    "llama_chain_tvl": 9058240278.0,
-    "llama_dex_volume_24h": 493600.0,
-    "llama_fees_24h": 2827.0,
+    "llama_chain_tvl": 8649455912.0,
+    "llama_dex_volume_24h": 533382.0,
+    "llama_fees_24h": 12542.0,
     "llama_stablecoin_supply": null
   }
 }

@@ -1,61 +1,68 @@
 {
   "symbol": "DOGE",
   "name": "狗狗币",
-  "last_price": 0.16207748651504517,
-  "ma50": 0.19898194909095765,
-  "ma200": 0.2091601327806711,
+  "last_price": 0.15838,
+  "ma50": 0.19577759999999997,
+  "ma200": 0.208902,
   "ma_trend": "bearish",
-  "retrieved_at": "2025-11-17T09:34:30.733282+00:00",
-  "price_source": "yfinance",
+  "retrieved_at": "2025-11-19T10:27:03.261862+00:00",
+  "price_source": "binance",
   "recent_supports": [
     {
       "date": "2025-11-06",
-      "price": 0.1614059954881668
+      "price": 0.16164
     },
     {
       "date": "2025-10-17",
-      "price": 0.18484200537204742
+      "price": 0.1847
     },
     {
       "date": "2025-09-25",
-      "price": 0.22270600497722626
+      "price": 0.22292
     }
   ],
   "support_strength": 3,
   "fibonacci_levels": {
-    "0%": 0.15746599435806274,
-    "38.2%": 0.20788923132419587,
-    "50%": 0.2234649956226349,
-    "61.8%": 0.23904075992107393,
-    "100%": 0.28946399688720703
+    "0%": 0.15214,
+    "38.2%": 0.20456568,
+    "50%": 0.22076,
+    "61.8%": 0.23695432,
+    "100%": 0.28938
   },
-  "swing_low": 0.15746599435806274,
-  "swing_high": 0.28946399688720703,
-  "swing_range": 0.1319980025291443,
+  "swing_low": 0.15214,
+  "swing_high": 0.28938,
+  "swing_range": 0.13724000000000003,
   "top_volume_nodes": [
     {
-      "price_low": 0.3763689901679754,
-      "price_high": 0.39152365643531084,
-      "volume": 107910505576.0
+      "price_low": 0.19505250000000002,
+      "price_high": 0.21012458333333334,
+      "volume": 62765197108.0
     },
     {
-      "price_low": 0.20966766122728586,
-      "price_high": 0.22482232749462128,
-      "volume": 93434837870.0
+      "price_low": 0.16490833333333332,
+      "price_high": 0.17998041666666667,
+      "volume": 56573633438.0
     },
     {
-      "price_low": 0.19451299495995045,
-      "price_high": 0.20966766122728586,
-      "volume": 92965464465.0
+      "price_low": 0.17998041666666667,
+      "price_high": 0.19505250000000002,
+      "volume": 53790102047.0
     }
   ],
-  "rsi14": 39.358469105372215,
+  "rsi14": 39.48098689962796,
   "rsi_bullish_divergence": false,
-  "pct_change_7d": -10.855332094506743,
-  "pct_change_30d": -14.515646065389088,
-  "distance_ma50_pct": -18.546638398361903,
-  "distance_ma200_pct": -22.510334851908713,
-  "volume_avg_30d": 2202019061.6,
+  "pct_change_7d": -6.933834763191915,
+  "pct_change_30d": -20.810000000000006,
+  "distance_ma50_pct": -19.102083180098226,
+  "distance_ma200_pct": -24.184545863610694,
+  "volume_latest": 443758935.0,
+  "volume_ma20": 1249681418.3,
+  "volume_spike_ratio": 0.3550976500904255,
+  "obv": 65173139340.59999,
+  "vpt": 8984337390.618334,
+  "vwap": 0.2657786862197791,
+  "ad_line": 45376421547.26649,
+  "volume_avg_30d": 1205068428.5666666,
   "onchain": {
     "mvrv": null,
     "lth_cost_basis": null,
@@ -64,16 +71,16 @@
     "utxo_realized_price_distribution": null
   },
   "sentiment": {
-    "fear_greed_value": "14",
+    "fear_greed_value": "15",
     "fear_greed_text": "Extreme Fear",
-    "funding_rate": 9.451e-05,
+    "funding_rate": 7.834e-05,
     "stablecoin_exchange_balance": null
   },
   "llama": {
     "llama_chain": "dogechain",
     "llama_chain_tvl": null,
     "llama_dex_volume_24h": 20074.0,
-    "llama_fees_24h": 173.0,
+    "llama_fees_24h": 1505.0,
     "llama_stablecoin_supply": null
   }
 }
