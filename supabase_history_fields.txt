@@ -153,4 +153,26 @@ alter table public.crypto_supports
     add column if not exists stablecoin_exchange_balance double precision;
 ```
 
-执行完上面的 `ALTER TABLE` 后，重新运行 `python3 fetch_equities_fmp.py` 与 `python3 fetch_crypto_supports.py`，即可把量能指标与行情数据写入 Supabase。
+```sql
+-- equity_opportunity_radar
+create table if not exists public.equity_opportunity_radar (
+    as_of_date date not null,
+    priority_rank integer,
+    symbol text not null,
+    market text,
+    trigger_type text,
+    trigger_price double precision,
+    stop_price double precision,
+    opportunity_score double precision,
+    risk_flags text,
+    reason_1line text,
+    value_score double precision,
+    volume_spike_ratio double precision,
+    drawdown_60d double precision,
+    atr14 double precision,
+    dollar_volume20 double precision,
+    primary key (symbol, as_of_date)
+);
+```
+
+执行完上面的 SQL 后，重新运行 `python3 fetch_equities_fmp.py`，即可把股票行情、评分和机会雷达写入 Supabase。

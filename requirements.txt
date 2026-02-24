@@ -3,3 +3,6 @@ plotly>=5.24.0
 pandas>=2.3.0
 numpy>=2.0.0
 requests>=2.32.0
+yfinance>=0.2.54
+supabase>=2.5.0
+websockets>=13.1

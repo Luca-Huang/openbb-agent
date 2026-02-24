@@ -21,7 +21,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -37,6 +37,7 @@ API_KEY = os.environ.get("FMP_API_KEY", "6GfWNQdQxymNoUiM2Be61I9oPDCzeNor")
 BASE_URL = "https://financialmodelingprep.com/stable"
 OUTPUT_DIR = Path(__file__).parent / "openbb_outputs"
 EQUITY_CONFIG_PATH = Path(__file__).parent / "equity_config.json"
+RADAR_CONFIG_PATH = Path(__file__).parent / "radar_config.json"
 LOOKBACK_DAYS = 730
 PERCENTILE_LOOKBACK_DAYS = 5 * 365
 DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
@@ -47,6 +48,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL)
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", DEFAULT_SUPABASE_KEY)
 SUPABASE_SUMMARY_TABLE = os.environ.get("SUPABASE_SUMMARY_TABLE", "equity_metrics")
 SUPABASE_HISTORY_TABLE = os.environ.get("SUPABASE_HISTORY_TABLE", "equity_metrics_history")
+SUPABASE_RADAR_TABLE = os.environ.get("SUPABASE_RADAR_TABLE", "equity_opportunity_radar")
 SUPABASE_CHUNK_SIZE = int(os.environ.get("SUPABASE_CHUNK_SIZE", "50"))
 SUPABASE_MAX_RETRY = int(os.environ.get("SUPABASE_MAX_RETRY", "3"))
 SUPABASE_RETRY_WAIT = float(os.environ.get("SUPABASE_RETRY_WAIT", "2"))
@@ -113,6 +115,73 @@ HISTORY_UPLOAD_COLUMNS = [
     "ad_line",
 ]
 
+RADAR_UPLOAD_COLUMNS = [
+    "as_of_date",
+    "priority_rank",
+    "symbol",
+    "market",
+    "trigger_type",
+    "trigger_price",
+    "stop_price",
+    "opportunity_score",
+    "risk_flags",
+    "reason_1line",
+    "value_score",
+    "volume_spike_ratio",
+    "drawdown_60d",
+    "atr14",
+    "dollar_volume20",
+]
+
+DEFAULT_RADAR_CONFIG: Dict[str, Any] = {
+    "markets": ["US", "HK", "CN"],
+    "liquidity": {
+        "min_price_usd": 2.0,
+        "min_dollar_volume20": 5_000_000,
+    },
+    "triggers": {
+        "pullback": {
+            "ma50_distance_max": 0.03,
+            "volume_spike_min": 1.1,
+            "require_support_above_primary": True,
+        },
+        "breakout": {
+            "volume_spike_min": 1.5,
+            "lookback_high_days": 20,
+        },
+    },
+    "risk": {
+        "mode": "medium_penalty",
+        "max_drawdown_60d_penalty_start": 0.22,
+    },
+    "output": {
+        "min_candidates": 8,
+        "max_candidates": 15,
+    },
+}
+
+
+def merge_nested_dict(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(base)
+    for key, value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            merged[key] = merge_nested_dict(base_value, value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_radar_config(config_path: Path = RADAR_CONFIG_PATH) -> Dict[str, Any]:
+    config = merge_nested_dict(DEFAULT_RADAR_CONFIG, {})
+    if not config_path.exists():
+        return config
+    with config_path.open(encoding="utf-8") as fh:
+        raw = json.load(fh)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Radar config must be an object: {config_path}")
+    return merge_nested_dict(config, raw)
+
 def load_equity_universe(config_path: Path = EQUITY_CONFIG_PATH) -> List[Dict[str, str]]:
     if not config_path.exists():
         raise FileNotFoundError(f"Equity config not found: {config_path}")
@@ -132,6 +201,7 @@ def load_equity_universe(config_path: Path = EQUITY_CONFIG_PATH) -> List[Dict[st
 
 
 STOCKS: List[Dict[str, str]] = load_equity_universe()
+RADAR_CONFIG: Dict[str, Any] = load_radar_config()
 
 
 def get_supabase_client() -> Optional["Client"]:
@@ -238,6 +308,28 @@ def sync_to_supabase(summary_df: pd.DataFrame, history_df: pd.DataFrame) -> None
         print(f"[Supabase] 已同步 {len(summary_records)} 条 summary、{len(history_records)} 条 history 数据。")
     except Exception as exc:  # noqa: BLE001
         print(f"[Supabase] 上传失败：{exc}")
+
+
+def sync_radar_to_supabase(radar_df: pd.DataFrame) -> None:
+    client = get_supabase_client()
+    if not client or radar_df.empty:
+        return
+    try:
+        upload = radar_df.copy()
+        for col in RADAR_UPLOAD_COLUMNS:
+            if col not in upload.columns:
+                upload[col] = np.nan
+        upload = upload[RADAR_UPLOAD_COLUMNS]
+        records = dataframe_to_records(upload, ["as_of_date"])
+        supabase_upsert(
+            client,
+            SUPABASE_RADAR_TABLE,
+            records,
+            ["symbol", "as_of_date"],
+        )
+        print(f"[Supabase] 已同步 {len(records)} 条机会雷达数据。")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[Supabase] 机会雷达上传失败：{exc}")
 
 
 @dataclass
@@ -433,6 +525,35 @@ def add_volume_indicators(df: pd.DataFrame) -> pd.DataFrame:
     else:
         money_flow_mult = pd.Series(0.0, index=enriched.index)
     enriched["ad_line"] = (money_flow_mult * enriched["volume"].fillna(0.0)).cumsum()
+    return enriched
+
+
+def add_radar_features(df: pd.DataFrame) -> pd.DataFrame:
+    enriched = df.sort_values("date").copy()
+    lookback_high = int(
+        RADAR_CONFIG.get("triggers", {})
+        .get("breakout", {})
+        .get("lookback_high_days", 20)
+    )
+    close = pd.to_numeric(enriched.get("close"), errors="coerce")
+    high = pd.to_numeric(enriched.get("high", close), errors="coerce")
+    low = pd.to_numeric(enriched.get("low", close), errors="coerce")
+    volume = pd.to_numeric(enriched.get("volume"), errors="coerce")
+
+    enriched["high_20d"] = high.rolling(window=lookback_high, min_periods=1).max().shift(1)
+    prev_close = close.shift(1)
+    true_range = pd.concat(
+        [
+            (high - low).abs(),
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    enriched["atr14"] = true_range.rolling(window=14, min_periods=1).mean()
+    rolling_peak = close.rolling(window=60, min_periods=1).max()
+    enriched["drawdown_60d"] = (rolling_peak - close) / rolling_peak.replace(0, np.nan)
+    enriched["dollar_volume20"] = (close * volume).rolling(window=20, min_periods=1).mean()
     return enriched
 
 
@@ -646,6 +767,259 @@ def score_sentiment(reco_key: Optional[str], reco_mean: Optional[float]) -> floa
         if reco_mean >= 3.5:
             return 5.0
     return 3.0
+
+
+def detect_trigger_type(
+    latest_row: pd.Series,
+    trigger_cfg: Dict[str, Any],
+) -> Optional[str]:
+    close = pd.to_numeric(latest_row.get("close"), errors="coerce")
+    ma50 = pd.to_numeric(latest_row.get("ma50"), errors="coerce")
+    high_20d = pd.to_numeric(latest_row.get("high_20d"), errors="coerce")
+    volume_spike = pd.to_numeric(latest_row.get("volume_spike_ratio"), errors="coerce")
+    support_primary = pd.to_numeric(
+        latest_row.get("support_level_primary", latest_row.get("support_level")),
+        errors="coerce",
+    )
+
+    pullback_cfg = trigger_cfg.get("pullback", {})
+    breakout_cfg = trigger_cfg.get("breakout", {})
+    pullback_distance_max = float(pullback_cfg.get("ma50_distance_max", 0.03))
+    pullback_volume_min = float(pullback_cfg.get("volume_spike_min", 1.1))
+    require_support = bool(pullback_cfg.get("require_support_above_primary", True))
+    breakout_volume_min = float(breakout_cfg.get("volume_spike_min", 1.5))
+
+    breakout = (
+        pd.notna(close)
+        and pd.notna(high_20d)
+        and close > high_20d
+        and (pd.notna(volume_spike) and volume_spike >= breakout_volume_min)
+    )
+    if breakout:
+        return "breakout"
+
+    near_ma50 = (
+        pd.notna(close)
+        and pd.notna(ma50)
+        and ma50 > 0
+        and abs(close - ma50) / ma50 <= pullback_distance_max
+    )
+    volume_ok = pd.notna(volume_spike) and volume_spike >= pullback_volume_min
+    support_ok = True
+    if require_support:
+        support_ok = pd.notna(support_primary) and pd.notna(close) and close >= support_primary
+    if near_ma50 and volume_ok and support_ok:
+        return "pullback"
+
+    return None
+
+
+def build_radar_record(
+    summary_row: pd.Series,
+    latest_row: pd.Series,
+    cfg: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    trigger_type = detect_trigger_type(latest_row, cfg.get("triggers", {}))
+    if trigger_type is None:
+        return None
+
+    close = pd.to_numeric(latest_row.get("close"), errors="coerce")
+    support_secondary = pd.to_numeric(
+        latest_row.get("support_level_secondary"),
+        errors="coerce",
+    )
+    ma200 = pd.to_numeric(latest_row.get("ma200"), errors="coerce")
+    if pd.notna(support_secondary):
+        stop_price = support_secondary
+    elif pd.notna(ma200):
+        stop_price = ma200 * 0.97
+    else:
+        stop_price = np.nan
+
+    volume_spike = pd.to_numeric(latest_row.get("volume_spike_ratio"), errors="coerce")
+    reason = (
+        f"{'放量突破' if trigger_type == 'breakout' else '回踩确认'}，"
+        f"量能比 {volume_spike:.2f}" if pd.notna(volume_spike) else
+        f"{'放量突破' if trigger_type == 'breakout' else '回踩确认'}"
+    )
+    return {
+        "as_of_date": pd.to_datetime(latest_row.get("date"), errors="coerce").date().isoformat()
+        if pd.notna(latest_row.get("date"))
+        else date.today().isoformat(),
+        "symbol": summary_row.get("symbol", latest_row.get("symbol")),
+        "market": summary_row.get("market", latest_row.get("market")),
+        "trigger_type": trigger_type,
+        "trigger_price": close,
+        "stop_price": stop_price,
+        "opportunity_score": np.nan,
+        "risk_flags": "",
+        "reason_1line": reason,
+    }
+
+
+def compute_risk_penalty(
+    drawdown_60d: Optional[float],
+    atr14: Optional[float],
+    cfg: Dict[str, Any],
+) -> float:
+    penalty = 0.0
+    dd_start = float(cfg.get("max_drawdown_60d_penalty_start", 0.22))
+    if drawdown_60d is not None and not pd.isna(drawdown_60d) and drawdown_60d > dd_start:
+        penalty += min(20.0, (drawdown_60d - dd_start) * 100)
+    if atr14 is not None and not pd.isna(atr14):
+        if atr14 >= 12:
+            penalty += 6.0
+        elif atr14 >= 8:
+            penalty += 3.0
+    return penalty
+
+
+def score_opportunity(
+    value_score: Optional[float],
+    trigger_type: Optional[str],
+    volume_spike_ratio: Optional[float],
+    drawdown_60d: Optional[float],
+    atr14: Optional[float],
+    cfg: Dict[str, Any],
+) -> float:
+    base = float(value_score) if value_score is not None and not pd.isna(value_score) else 0.0
+    trigger_bonus = 0.0
+    if trigger_type == "breakout":
+        trigger_bonus = 8.0
+    elif trigger_type == "pullback":
+        trigger_bonus = 6.0
+
+    volume_bonus = 0.0
+    if volume_spike_ratio is not None and not pd.isna(volume_spike_ratio):
+        volume_bonus = max(0.0, min(12.0, (float(volume_spike_ratio) - 1.0) * 10))
+    risk_penalty = compute_risk_penalty(drawdown_60d, atr14, cfg)
+    return max(0.0, min(100.0, base + trigger_bonus + volume_bonus - risk_penalty))
+
+
+def select_radar_candidates(
+    radar_df: pd.DataFrame,
+    min_n: int,
+    max_n: int,
+) -> pd.DataFrame:
+    if radar_df.empty:
+        return radar_df.copy()
+    filtered = radar_df.copy()
+    filtered = filtered[filtered["trigger_type"].notna()]
+    if filtered.empty:
+        return filtered
+
+    filtered["opportunity_score"] = pd.to_numeric(
+        filtered["opportunity_score"], errors="coerce"
+    ).fillna(-1.0)
+    filtered = filtered.sort_values("opportunity_score", ascending=False)
+    max_n = max(max_n, 1)
+    min_n = max(min_n, 0)
+
+    selected_indices: List[int] = []
+    if "market" in filtered.columns:
+        for market in ["US", "HK", "CN"]:
+            top = filtered[filtered["market"] == market].head(1)
+            if not top.empty:
+                selected_indices.extend(top.index.tolist())
+
+    for idx in filtered.index.tolist():
+        if idx in selected_indices:
+            continue
+        selected_indices.append(idx)
+        if len(selected_indices) >= max_n:
+            break
+
+    selected = filtered.loc[selected_indices].copy()
+    selected = selected.sort_values("opportunity_score", ascending=False)
+    if len(selected) < min_n:
+        selected = filtered.head(min_n)
+    return selected.head(max_n)
+
+
+def build_opportunity_radar(
+    summary_df: pd.DataFrame,
+    history_df: pd.DataFrame,
+    cfg: Dict[str, Any],
+) -> pd.DataFrame:
+    if summary_df.empty or history_df.empty:
+        return pd.DataFrame(columns=RADAR_UPLOAD_COLUMNS)
+
+    latest = (
+        history_df.sort_values("date")
+        .dropna(subset=["symbol"])
+        .groupby("symbol")
+        .last()
+    )
+    if latest.empty:
+        return pd.DataFrame(columns=RADAR_UPLOAD_COLUMNS)
+
+    liquidity_cfg = cfg.get("liquidity", {})
+    min_price = float(liquidity_cfg.get("min_price_usd", 2.0))
+    min_dollar_volume20 = float(liquidity_cfg.get("min_dollar_volume20", 5_000_000))
+    risk_cfg = cfg.get("risk", {})
+    dd_start = float(risk_cfg.get("max_drawdown_60d_penalty_start", 0.22))
+
+    radar_records: List[Dict[str, Any]] = []
+    for _, summary_row in summary_df.iterrows():
+        symbol = summary_row.get("symbol")
+        if symbol not in latest.index:
+            continue
+        latest_row = latest.loc[symbol]
+        radar_rec = build_radar_record(summary_row, latest_row, cfg)
+        if radar_rec is None:
+            continue
+
+        trigger_price = pd.to_numeric(radar_rec.get("trigger_price"), errors="coerce")
+        dollar_volume20 = pd.to_numeric(latest_row.get("dollar_volume20"), errors="coerce")
+        if pd.isna(trigger_price) or trigger_price < min_price:
+            continue
+        if pd.isna(dollar_volume20) or dollar_volume20 < min_dollar_volume20:
+            continue
+
+        drawdown = pd.to_numeric(latest_row.get("drawdown_60d"), errors="coerce")
+        atr14 = pd.to_numeric(latest_row.get("atr14"), errors="coerce")
+        volume_spike = pd.to_numeric(latest_row.get("volume_spike_ratio"), errors="coerce")
+        opportunity_score = score_opportunity(
+            summary_row.get("value_score"),
+            radar_rec.get("trigger_type"),
+            volume_spike,
+            drawdown,
+            atr14,
+            risk_cfg,
+        )
+        risk_flags: List[str] = []
+        if pd.notna(drawdown) and drawdown > dd_start:
+            risk_flags.append("drawdown60d_high")
+        if pd.notna(atr14) and atr14 >= 12:
+            risk_flags.append("atr_high")
+
+        radar_rec.update(
+            {
+                "value_score": pd.to_numeric(summary_row.get("value_score"), errors="coerce"),
+                "volume_spike_ratio": volume_spike,
+                "drawdown_60d": drawdown,
+                "atr14": atr14,
+                "dollar_volume20": dollar_volume20,
+                "opportunity_score": opportunity_score,
+                "risk_flags": ",".join(risk_flags),
+            }
+        )
+        radar_records.append(radar_rec)
+
+    radar_df = pd.DataFrame(radar_records)
+    if radar_df.empty:
+        return pd.DataFrame(columns=RADAR_UPLOAD_COLUMNS)
+    radar_df = select_radar_candidates(
+        radar_df,
+        min_n=int(cfg.get("output", {}).get("min_candidates", 8)),
+        max_n=int(cfg.get("output", {}).get("max_candidates", 15)),
+    )
+    radar_df = radar_df.sort_values("opportunity_score", ascending=False).reset_index(drop=True)
+    radar_df["priority_rank"] = radar_df.index + 1
+    for col in RADAR_UPLOAD_COLUMNS:
+        if col not in radar_df.columns:
+            radar_df[col] = np.nan
+    return radar_df[RADAR_UPLOAD_COLUMNS]
 
 
 def classify_score(score: float) -> str:
@@ -919,6 +1293,7 @@ def main() -> None:
         history = calculate_support_levels(history)
         history = add_trend_indicators(history)
         history = add_volume_indicators(history)
+        history = add_radar_features(history)
         combined.append(
             history[
                 [
@@ -952,6 +1327,10 @@ def main() -> None:
                     "vpt",
                     "vwap",
                     "ad_line",
+                    "high_20d",
+                    "atr14",
+                    "drawdown_60d",
+                    "dollar_volume20",
                 ]
             ].copy()
         )
@@ -1014,11 +1393,16 @@ def main() -> None:
     summary_df["name"] = summary_df["name_en"] + "（" + summary_df["name_cn"] + "）"
     summary_path = OUTPUT_DIR / "three_month_summary.csv"
     summary_df.to_csv(summary_path, index=False)
+    radar_df = build_opportunity_radar(summary_df, combined_df, RADAR_CONFIG)
+    radar_path = OUTPUT_DIR / "equity_opportunity_radar.csv"
+    radar_df.to_csv(radar_path, index=False)
 
     sync_to_supabase(summary_df, combined_df)
+    sync_radar_to_supabase(radar_df)
 
     print("Saved:", combined_path)
     print("Saved:", summary_path)
+    print("Saved:", radar_path)
     if failures:
         print("Warnings:")
         for msg in failures:

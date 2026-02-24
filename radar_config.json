@@ -1,0 +1,26 @@
+{
+  "markets": ["US", "HK", "CN"],
+  "liquidity": {
+    "min_price_usd": 2.0,
+    "min_dollar_volume20": 5000000
+  },
+  "triggers": {
+    "pullback": {
+      "ma50_distance_max": 0.03,
+      "volume_spike_min": 1.1,
+      "require_support_above_primary": true
+    },
+    "breakout": {
+      "volume_spike_min": 1.5,
+      "lookback_high_days": 20
+    }
+  },
+  "risk": {
+    "mode": "medium_penalty",
+    "max_drawdown_60d_penalty_start": 0.22
+  },
+  "output": {
+    "min_candidates": 8,
+    "max_candidates": 15
+  }
+}

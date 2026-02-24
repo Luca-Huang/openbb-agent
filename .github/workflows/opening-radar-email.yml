@@ -1,0 +1,47 @@
+name: Opening Radar Email
+
+on:
+  schedule:
+    - cron: "*/15 * * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  opening-radar-email:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install yfinance supabase
+
+      - name: Build latest stock radar
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SUMMARY_TABLE: equity_metrics
+          SUPABASE_HISTORY_TABLE: equity_metrics_history
+          SUPABASE_RADAR_TABLE: equity_opportunity_radar
+        run: |
+          python fetch_equities_fmp.py
+
+      - name: Send opening radar email
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          MAIL_TO: 794166954@qq.com
+          RADAR_MAIL_SUBJECT_PREFIX: "[Value Anchor]"
+        run: |
+          python scripts/send_radar_email.py

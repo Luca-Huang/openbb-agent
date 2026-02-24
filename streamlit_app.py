@@ -314,7 +314,7 @@ DATA_DIR = Path(__file__).parent / "openbb_outputs"
 HISTORY_PATH = DATA_DIR / "three_month_close_history.csv"
 SUMMARY_PATH = DATA_DIR / "three_month_summary.csv"
 ANALYST_PATH = DATA_DIR / "us_analyst_estimates.csv"
-CRYPTO_CSV_PATH = DATA_DIR / "crypto" / "crypto_support_dashboard.csv"
+RADAR_PATH = DATA_DIR / "equity_opportunity_radar.csv"
 DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
 DEFAULT_SUPABASE_KEY = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
@@ -326,6 +326,7 @@ SUPABASE_HEADERS = {
     "Authorization": f"Bearer {SUPABASE_KEY}",
 }
 SUPABASE_HOLDINGS_TABLE = os.environ.get("SUPABASE_HOLDINGS_TABLE", "holdings")
+SUPABASE_RADAR_TABLE = os.environ.get("SUPABASE_RADAR_TABLE", "equity_opportunity_radar")
 
 TIER_BADGE = {
     "黄金坑": "badge-green",
@@ -400,19 +401,17 @@ def bool_chip(value: bool | None) -> str:
 
 def render_page_nav(active: str = "equity") -> None:
     equity_class = "tab-pill active" if active == "equity" else "tab-pill"
-    crypto_class = "tab-pill active" if active == "crypto" else "tab-pill"
     nav_html = f"""
     <div class="nav-bar">
         <div class="nav-brand">
             <div class="brand-icon">VA</div>
             <div>
                 <strong>价值锚点 Value Anchor</strong><br/>
-                <span style="font-size:0.85rem;color:var(--text-muted);">Equity & Crypto Monitor</span>
+                <span style="font-size:0.85rem;color:var(--text-muted);">Equity Opportunity Monitor</span>
             </div>
         </div>
         <div class="nav-tabs">
             <div class="{equity_class}">股票资产 (Equity)</div>
-            <div class="{crypto_class}">加密资产 (Crypto)</div>
         </div>
         <div class="live-indicator">
             <span></span> Live Feed
@@ -692,6 +691,65 @@ def align_history_to_summary(history_df: pd.DataFrame, summary_df: pd.DataFrame)
     return history_df
 
 
+def render_opportunity_radar() -> None:
+    st.subheader("今日机会雷达")
+    radar_df = load_radar()
+    if radar_df.empty:
+        st.info("暂无机会雷达数据。请先运行 `python3 fetch_equities_fmp.py` 生成雷达。")
+        return
+
+    if "as_of_date" in radar_df.columns and radar_df["as_of_date"].notna().any():
+        latest_date = radar_df["as_of_date"].max()
+        radar_df = radar_df[radar_df["as_of_date"] == latest_date]
+
+    trigger_series = radar_df.get("trigger_type", pd.Series(dtype=str)).fillna("")
+    pullback_count = int((trigger_series == "pullback").sum())
+    breakout_count = int((trigger_series == "breakout").sum())
+    avg_score = pd.to_numeric(radar_df.get("opportunity_score"), errors="coerce").mean()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("候选数", f"{len(radar_df)}")
+    c2.metric("回踩机会", f"{pullback_count}")
+    c3.metric("突破机会", f"{breakout_count}")
+    c4.metric("平均机会分", f"{avg_score:.1f}" if pd.notna(avg_score) else "N/A")
+
+    display = radar_df.copy()
+    rename_map = {
+        "market": "市场",
+        "symbol": "标的",
+        "trigger_type": "机会类型",
+        "trigger_price": "触发价",
+        "stop_price": "止损价",
+        "opportunity_score": "机会分",
+        "risk_flags": "风险标记",
+        "reason_1line": "一句话理由",
+    }
+    for key in rename_map:
+        if key not in display.columns:
+            display[key] = np.nan
+    display["market"] = display["market"].map(MARKET_LABEL).fillna(display["market"])
+    display["trigger_price"] = pd.to_numeric(display["trigger_price"], errors="coerce")
+    display["stop_price"] = pd.to_numeric(display["stop_price"], errors="coerce")
+    display["opportunity_score"] = pd.to_numeric(display["opportunity_score"], errors="coerce")
+    display["trigger_type"] = display["trigger_type"].map(
+        {"pullback": "回踩", "breakout": "突破"}
+    ).fillna(display["trigger_type"])
+    display = display.rename(columns=rename_map)
+    display = display[
+        ["市场", "标的", "机会类型", "触发价", "止损价", "机会分", "风险标记", "一句话理由"]
+    ]
+    st.dataframe(
+        display,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "触发价": st.column_config.NumberColumn("触发价", format="%.2f"),
+            "止损价": st.column_config.NumberColumn("止损价", format="%.2f"),
+            "机会分": st.column_config.NumberColumn("机会分", format="%.1f"),
+        },
+    )
+
+
 def render_volume_section(history: pd.DataFrame) -> None:
     st.subheader("量能指标速览")
     latest = (
@@ -796,7 +854,7 @@ def load_history() -> pd.DataFrame:
         order="as_of_date.desc",
         limit=5000,
     )
-    use_fallback = False
+    df = pd.DataFrame()
     if supabase_df is not None and not supabase_df.empty:
         df = supabase_df.rename(columns={"as_of_date": "date"})
         if "date" in df.columns:
@@ -829,34 +887,37 @@ def load_history() -> pd.DataFrame:
         "vwap",
         "ad_line",
     ]
-    for col in required_cols:
-        if col not in df.columns:
-            df[col] = np.nan
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-    essential = ["close", "close_norm", "close_percentile"]
-    if all(df[col].isna().all() for col in essential):
+    if not df.empty:
+        for col in required_cols:
+            if col not in df.columns:
+                df[col] = np.nan
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        essential = ["close", "close_norm", "close_percentile"]
+        if not all(df[col].isna().all() for col in essential):
+            if "name" not in df.columns:
+                df["name"] = df.apply(
+                    lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
+                    if row.get("name_en")
+                    else row.get("name_cn", row.get("symbol")),
+                    axis=1,
+                )
+            if "support_level" not in df.columns and "support_level_primary" in df.columns:
+                df["support_level"] = df["support_level_primary"]
+            if "date" in df.columns:
+                df = df.sort_values("date")
+            return df
         st.warning(
             "Supabase 历史表缺少关键价格字段，临时改用仓库中的 CSV。请运行 `fetch_equities_fmp.py` "
             "并上传到 Supabase，以恢复云端历史行情。"
         )
-        use_fallback = True
-    else:
-        if "name" not in df.columns:
-            df["name"] = df.apply(
-                lambda row: f"{row.get('name_en','')}（{row.get('name_cn','')}）"
-                if row.get("name_en")
-                else row.get("name_cn", row.get("symbol")),
-                axis=1,
-            )
-        if "support_level" not in df.columns and "support_level_primary" in df.columns:
-            df["support_level"] = df["support_level_primary"]
-        if "date" in df.columns:
-            df = df.sort_values("date")
-        return df
 
     # Fallback to repo CSV
+    if not HISTORY_PATH.exists():
+        st.warning("本地历史 CSV 不存在，无法加载股票历史行情。")
+        return pd.DataFrame(columns=["date", "symbol", "name", "market"] + required_cols)
     fallback = pd.read_csv(HISTORY_PATH)
     fallback["date"] = pd.to_datetime(fallback["date"], errors="coerce")
+    fallback = fallback.dropna(subset=["date"])
     if "support_level" not in fallback.columns and "support_level_primary" in fallback.columns:
         fallback["support_level"] = fallback["support_level_primary"]
     if "name" not in fallback.columns:
@@ -892,53 +953,43 @@ def load_summary() -> pd.DataFrame:
 
 
 @st.cache_data
-def load_analyst() -> pd.DataFrame:
-    """保留占位，未来如需重启分析师预测模块再启用。"""
-    return pd.DataFrame()
+def load_radar() -> pd.DataFrame:
+    df = fetch_supabase_table(
+        SUPABASE_RADAR_TABLE,
+        order="as_of_date.desc,opportunity_score.desc",
+        limit=500,
+    )
+    if df is None or df.empty:
+        if RADAR_PATH.exists():
+            df = pd.read_csv(RADAR_PATH)
+        else:
+            return pd.DataFrame()
+
+    numeric_cols = [
+        "trigger_price",
+        "stop_price",
+        "opportunity_score",
+        "value_score",
+        "volume_spike_ratio",
+        "drawdown_60d",
+        "atr14",
+        "dollar_volume20",
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "as_of_date" in df.columns:
+        df["as_of_date"] = pd.to_datetime(df["as_of_date"], errors="coerce").dt.date
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].astype(str).str.upper()
+    return df
 
 
 @st.cache_data
-def load_crypto_supports() -> pd.DataFrame:
-    df = fetch_supabase_table("crypto_supports")
-    if df is None or df.empty:
-        if CRYPTO_CSV_PATH.exists():
-            df = pd.read_csv(CRYPTO_CSV_PATH)
-        else:
-            return pd.DataFrame()
-    for col in [
-        "last_price",
-        "ma50",
-        "ma200",
-        "support_strength",
-        "fib_38_2",
-        "fib_50",
-        "fib_61_8",
-        "swing_low",
-        "swing_high",
-        "swing_range",
-        "pct_change_7d",
-        "pct_change_30d",
-        "distance_ma50_pct",
-        "distance_ma200_pct",
-        "volume_latest",
-        "volume_ma20",
-        "volume_spike_ratio",
-        "obv",
-        "vpt",
-        "vwap",
-        "ad_line",
-        "volume_avg_30d",
-        "mvrv",
-        "lth_cost_basis",
-        "exchange_netflow",
-        "asopr",
-        "funding_rate",
-        "fear_greed",
-        "stablecoin_exchange_balance",
-    ]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+def load_analyst() -> pd.DataFrame:
+    """保留占位，未来如需重启分析师预测模块再启用。"""
+    return pd.DataFrame()
 
 
 def render_equity_content() -> None:
@@ -971,6 +1022,7 @@ def render_equity_content() -> None:
     summary_full = summary.copy()
     history_full = history.copy()
     render_overview_cards(summary_full, history_full)
+    render_opportunity_radar()
 
     st.markdown("### 快速筛选")
     expected_cols = {
@@ -1482,11 +1534,7 @@ def render_equity_content() -> None:
 def render_equity_dashboard() -> None:
     render_page_nav("equity")
     st.title("价值锚点监控仪表盘")
-    equity_tab, crypto_tab = st.tabs(["股票面板", "加密面板"])
-    with equity_tab:
-        render_equity_content()
-    with crypto_tab:
-        render_crypto_dashboard()
+    render_equity_content()
 
 def render_holdings_panel(summary: pd.DataFrame, history: pd.DataFrame) -> None:
     st.subheader("持仓与风控模块")
@@ -1589,150 +1637,6 @@ def render_holdings_panel(summary: pd.DataFrame, history: pd.DataFrame) -> None:
             if delete_holding(symbol):
                 st.success(f"{symbol} 已删除")
                 st.experimental_rerun()
-
-
-def render_crypto_dashboard() -> None:
-    st.subheader("加密资产支撑面板")
-    crypto_df = load_crypto_supports()
-    if crypto_df.empty:
-        st.info("暂无加密资产数据。请先运行 `python3 fetch_crypto_supports.py` 并同步到 Supabase。")
-        return
-    crypto_df["symbol"] = crypto_df["symbol"].str.upper()
-    trend_options = sorted(crypto_df["ma_trend"].dropna().unique().tolist())
-    if trend_options:
-        selected_trend = st.multiselect("趋势筛选", trend_options, default=trend_options)
-        if selected_trend:
-            crypto_df = crypto_df[crypto_df["ma_trend"].isin(selected_trend)]
-    search_kw = st.text_input("搜索加密资产")
-    if search_kw:
-        k = search_kw.strip().lower()
-        if k:
-            name_series = (
-                crypto_df["name"].astype(str)
-                if "name" in crypto_df.columns
-                else pd.Series("", index=crypto_df.index)
-            )
-            crypto_df = crypto_df[
-                crypto_df["symbol"].str.lower().str.contains(k)
-                | name_series.str.lower().str.contains(k)
-            ]
-    options = sorted(crypto_df["symbol"].unique())
-    selected = st.multiselect("选择资产", options, default=options)
-    if selected:
-        crypto_df = crypto_df[crypto_df["symbol"].isin(selected)]
-    display_cols = [
-        "symbol",
-        "name",
-        "pct_change_7d",
-        "pct_change_30d",
-        "volume_spike_ratio",
-        "obv",
-        "vpt",
-        "vwap",
-        "support_strength",
-        "fear_greed",
-        "funding_rate",
-        "recent_supports",
-    ]
-    missing = [c for c in display_cols if c not in crypto_df.columns]
-    for col in missing:
-        crypto_df[col] = np.nan
-    # Price summary cards
-    price_cols = st.columns(min(len(crypto_df), 4) or 1)
-    for idx, (_, row) in enumerate(crypto_df.head(4).iterrows()):
-        delta = row.get("pct_change_7d")
-        delta_str = f"{delta:.2f}%" if pd.notna(delta) else "N/A"
-        price_cols[idx % len(price_cols)].metric(
-            f"{row['symbol']} 现价",
-            f"${row['last_price']:.2f}" if pd.notna(row["last_price"]) else "N/A",
-            f"7日 {delta_str}",
-        )
-
-    st.dataframe(
-        crypto_df[display_cols].rename(
-            columns={
-                "symbol": "代码",
-                "name": "资产",
-                "pct_change_7d": "7日涨跌%",
-                "pct_change_30d": "30日涨跌%",
-                "volume_spike_ratio": "成交量突增比率",
-                "support_strength": "支撑强度",
-                "fear_greed": "恐贪指数",
-                "funding_rate": "资金费率",
-                "recent_supports": "近期支撑",
-            }
-        ),
-        use_container_width=True,
-        column_config={
-            "7日涨跌%": st.column_config.NumberColumn("7日涨跌%", format="%.2f"),
-            "30日涨跌%": st.column_config.NumberColumn("30日涨跌%", format="%.2f"),
-            "成交量突增比率": st.column_config.ProgressColumn(
-                "成交量突增比率", min_value=0.0, max_value=3.0, format="%.2f"
-            ),
-        },
-    )
-    if {"volume_spike_ratio", "symbol"}.issubset(crypto_df.columns):
-        ratio_fig = px.bar(
-            crypto_df,
-            x="symbol",
-            y="volume_spike_ratio",
-            title="加密资产成交量突增比率",
-            color_discrete_sequence=THEME_COLORS,
-        )
-        st.plotly_chart(ratio_fig, use_container_width=True)
-    symbols = crypto_df["symbol"].unique().tolist()
-    if {"symbol", "last_price", "ma50", "ma200"}.issubset(crypto_df.columns):
-        st.markdown("### 现价 / MA50 / MA200（按币种分表）")
-        # 按币种分成最多 4 个表，避免价格量级差异放在一个表里难以阅读
-        groups: dict[int, list[str]] = {}
-        for idx, sym in enumerate(sorted(symbols)):
-            groups.setdefault(idx % 4, []).append(sym)
-        cols = st.columns(min(4, len(groups)))
-        base_cols = [
-            "symbol",
-            "last_price",
-            "ma50",
-            "ma200",
-            "distance_ma50_pct",
-            "distance_ma200_pct",
-        ]
-        for slot, syms in groups.items():
-            subset = crypto_df[crypto_df["symbol"].isin(syms)][base_cols].copy()
-            subset = subset.rename(
-                columns={
-                    "symbol": "资产",
-                    "last_price": "现价(USD)",
-                    "ma50": "MA50",
-                    "ma200": "MA200",
-                    "distance_ma50_pct": "距MA50%",
-                    "distance_ma200_pct": "距MA200%",
-                }
-            )
-            subset["现价(USD)"] = subset["现价(USD)"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
-            subset["MA50"] = subset["MA50"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
-            subset["MA200"] = subset["MA200"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "N/A")
-            subset["距MA50%"] = subset["距MA50%"].map(lambda v: f"{v:.2f}%" if pd.notna(v) else "N/A")
-            subset["距MA200%"] = subset["距MA200%"].map(lambda v: f"{v:.2f}%" if pd.notna(v) else "N/A")
-            cols[slot].dataframe(subset, hide_index=True, use_container_width=True)
-            # 图表展示：同组币种的现价/MA50/MA200 对比
-            numeric_subset = crypto_df[crypto_df["symbol"].isin(syms)][["symbol", "last_price", "ma50", "ma200"]]
-            price_long = numeric_subset.melt(
-                id_vars="symbol",
-                value_vars=["last_price", "ma50", "ma200"],
-                var_name="指标",
-                value_name="数值",
-            )
-            chart = px.bar(
-                price_long,
-                x="symbol",
-                y="数值",
-                color="指标",
-                barmode="group",
-                title="现价 / MA50 / MA200 对比",
-                color_discrete_sequence=THEME_COLORS,
-            )
-            cols[slot].plotly_chart(chart, use_container_width=True, key=f"crypto-ma-chart-{slot}")
-
 
 
 def main() -> None:

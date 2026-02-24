@@ -6,16 +6,18 @@
    - 美股优先通过 FMP `stable/historical-price-eod/light` 拉取行情，若接口受限则自动 fallback 到 yfinance。
    - 港股 / A 股 默认使用 yfinance 数据。
    - 计算 PE/P.S 分位、PEG、自由现金流收益率、滚动支撑位、远期 PE 等指标，并生成刷新频率、下一次刷新日期。
+   - 生成“股票机会雷达”（混合信号：`pullback` / `breakout`），输出可执行候选（触发价、止损价、机会分、风险标记）。
    - 内置“价值锚点评分体系”，从估值、成长、财务、技术/情绪四个维度打分，输出 `value_score` 与等级（黄金坑 / 白银坑 / 合理区 / 观望）。
    - 输出文件位于 `openbb_outputs/`：
      - `three_month_close_history.csv`
      - `three_month_summary.csv`
+     - `equity_opportunity_radar.csv`
      - `us_analyst_estimates.csv`
 
 2. **可视化面板** (`streamlit_app.py`)：
    - 通过 `streamlit run streamlit_app.py` 启动，支持按市场筛选（美股、港股、A 股）；
+   - 首屏优先显示“今日机会雷达”（机会类型、触发价、止损价、机会分）；
    - 顶部“股票面板”包含归一化走势、PE/历史分位、支撑位、入场评分，并新增 **量能指标速览**（当日成交量 vs 20 日均量、突增比率、OBV/VPT/VWAP/A/D 等）；
-   - “加密面板” 恢复展示 BTC/ETH/SOL/DOGE 等支撑地图，可筛选趋势/关键字，并按币种卡片显示现价与 MA50/MA200；
    - “指标说明” 中可查看各指标及评分逻辑。
 
 ## 价值锚点评分体系（100分）
@@ -62,7 +64,7 @@ export SUPABASE_KEY="YOUR_SUPABASE_SERVICE_ROLE_OR_ANON_KEY"
 export SUPABASE_SUMMARY_TABLE="equity_metrics"
 export SUPABASE_HISTORY_TABLE="equity_metrics_history"
 export SUPABASE_ANALYST_TABLE="us_analyst_estimates"
-export SUPABASE_CRYPTO_TABLE="crypto_supports"
+export SUPABASE_RADAR_TABLE="equity_opportunity_radar"
 ```
 
 > 默认值已写入脚本，若直接复用仓库提供的 Supabase 实例，可暂不设置。若部署到自己的 Supabase，请务必覆盖 URL/KEY。
@@ -72,11 +74,10 @@ export SUPABASE_CRYPTO_TABLE="crypto_supports"
 ```bash
 source .venv311/bin/activate  # 如果使用本地虚拟环境
 python fetch_equities_fmp.py
-python fetch_crypto_supports.py
 python fetch_us_analyst_estimates.py
 ```
 
-三份脚本会：
+两份脚本会：
 - 拉取/计算指标并生成 `openbb_outputs/*.csv`；
 - 将数据 upsert 到 Supabase（包含失败重试、冲突兜底逻辑）。
 
@@ -88,7 +89,7 @@ python fetch_us_analyst_estimates.py
 streamlit run streamlit_app.py
 ```
 
-Streamlit 应用会优先从 Supabase REST API 读取 `equity_metrics` / `equity_metrics_history` / `crypto_supports` / `us_analyst_estimates`，仅当云端无数据时才回退到本地 CSV。
+Streamlit 应用会优先从 Supabase REST API 读取 `equity_metrics` / `equity_metrics_history` / `us_analyst_estimates`，仅当云端无数据时才回退到本地 CSV。
 
 部署到 Streamlit Cloud 的步骤：
 1. Fork 本仓库；
@@ -101,40 +102,32 @@ Streamlit 应用会优先从 Supabase REST API 读取 `equity_metrics` / `equity
   `cmd /c "cd C:\path\openbb-agent && C:\Python311\python fetch_equities_fmp.py"`.
 - **Linux/NAS**：`crontab -e` 添加  
   `0 7 * * * cd /path/openbb-agent && /usr/bin/python3 fetch_equities_fmp.py >> /path/log/equity.log 2>&1`.
-- **GitHub Actions**：建立 schedule workflow，runner 上执行三份脚本，适合无服务器成本的场景。
+- **GitHub Actions**：建立 schedule workflow，runner 上执行两份脚本，适合无服务器成本的场景。
+
+### 6. 机会雷达信号定义
+
+- `pullback`：回踩确认，价格接近 MA50 且在主支撑上方，并有量能确认。
+- `breakout`：放量突破，价格突破近 20 日高点且量能显著放大。
+- 建议先按 `opportunity_score` 排序，再结合 `risk_flags` 决定仓位。
+
+### 7. 开盘自动邮件推送
+
+- 推送脚本：`scripts/send_radar_email.py`
+- 定时工作流：`.github/workflows/opening-radar-email.yml`
+- 默认收件人：`794166954@qq.com`
+
+本地手动触发：
+
+```bash
+python scripts/send_radar_email.py
+```
+
+必需环境变量：
+
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`
+- `MAIL_FROM`, `MAIL_TO`（默认会回退到 `794166954@qq.com`）
 
 > 注意：PEG、PB 等部分指标受限于免费数据源，若上市未满 5 年或数据缺失，对应分位会显示 `N/A`，`pe_coverage_years` / `ps_coverage_years` 会显示实际覆盖年限。
-
-## 加密货币“三维度确认法”数据采集
-
-面对震荡下行行情，仅依赖单一技术位容易失效。`fetch_crypto_supports.py` + `crypto_config.json` 新增如下能力：
-
-1. **技术面（CoinGecko / Binance / yfinance fallback）**  
-   - 默认跟踪 BTC、ETH、SOL、DOGE（可在 `crypto_config.json` 扩展），拉取 420 天价格/成交量并生成 50/200 日均线、最近 3 个摆动低点、Volume Profile (HVN) 最高成交区、14 日 RSI、斐波那契 38.2%/50%/61.8% 关键位、7/30 日涨跌幅、距离均线的偏离百分比、摆动区间（Swing Range）上下沿、支撑测试次数、30 日均量等。
-2. **链上数据（Glassnode，可选）**  
-   - 支持 MVRV、长期持有者成本基础、交易所净流量、aSOPR、UTXO 成本分布等指标；在 `crypto_config.json` 中写入 Glassnode API Key 即可生效。
-3. **市场情绪与宏观变量**  
-   - 合并恐惧与贪婪指数、Binance 永续资金费率、交易所稳定币库存变化，帮助判断“弹药”是否充足。
-
-运行方式：
-```bash
-python fetch_crypto_supports.py
-```
-输出位于 `openbb_outputs/crypto/`：
-- `BTC_support_map.json` 等：汇总当前价格、支撑/阻力、链上与情绪信号，可直接投喂到 Agent/知识库。
-- `crypto_support_dashboard.csv`：适合 Excel/Streamlit 统一查看，便于按“技术 + 链上 + 情绪”三重共振制定分批建仓 / 止损 / 减仓策略。
-
-> 若暂未配置 Glassnode API Key，脚本会跳过链上指标，其余技术与情绪数据仍可正常使用。
-
-### 名词解释（加密货币部分常用字段）
-- **recent_supports / 支撑次数**：最近三次摆动低点及对应价格 / 被成功测试的次数，次数越高说明该区间成交确认度越高。
-- **fib_38_2 / 50 / 61_8**：斐波那契关键回撤位，截取近 120 天摆动区间计算的 38.2%、50%、61.8% 目标价。
-- **swing_low / swing_high / swing_range**：最近摆动区间的最低/最高价及跨度，有助于感知当前波动幅度。
-- **pct_change_7d / pct_change_30d**：过去 7 / 30 日的百分比涨跌幅。
-- **distance_ma50_pct / distance_ma200_pct**：现价相对于 50 / 200 日均线的偏离百分比，为负表示位于均线下方。
-- **volume_avg_30d**：过去 30 日的平均成交量，用于观察筹码活跃度变化。
-- **hvn_zones**：Volume Profile 的高成交量节点，每个节点包含价格区间上下沿及成交量。
-- **fear_greed / funding_rate**：来自恐惧与贪婪指数 / Binance 永续合约资金费率的情绪信号。
 
 ## 后续迭代计划
 
