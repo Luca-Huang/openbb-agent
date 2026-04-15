@@ -25,6 +25,7 @@ jobs:
           pip install yfinance supabase
 
       - name: Build latest stock radar
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
@@ -35,6 +36,7 @@ jobs:
           python fetch_equities_fmp.py
 
       - name: Send opening radar email
+        continue-on-error: true
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
