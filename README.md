@@ -1,51 +1,42 @@
-# 价值监控与评分系统
+# A 股个人研究工作台
 
-该项目包含两部分：
+面向个人日常使用的 A 股研究工作台，服务 10-30 只重点跟踪标的。
 
-1. **数据采集脚本** (`fetch_equities_fmp.py`)：
-   - 美股优先通过 FMP `stable/historical-price-eod/light` 拉取行情，若接口受限则自动 fallback 到 yfinance。
-   - 港股 / A 股 默认使用 yfinance 数据。
-   - 计算 PE/P.S 分位、PEG、自由现金流收益率、滚动支撑位、远期 PE 等指标，并生成刷新频率、下一次刷新日期。
-   - 生成“股票机会雷达”（混合信号：`pullback` / `breakout`），输出可执行候选（触发价、止损价、机会分、风险标记）。
-   - 内置“价值锚点评分体系”，从估值、成长、财务、技术/情绪四个维度打分，输出 `value_score` 与等级（黄金坑 / 白银坑 / 合理区 / 观望）。
-   - 输出文件位于 `openbb_outputs/`：
-     - `three_month_close_history.csv`
-     - `three_month_summary.csv`
-     - `equity_opportunity_radar.csv`
-     - `us_analyst_estimates.csv`
+## 核心能力
 
-2. **可视化面板** (`streamlit_app.py`)：
-   - 通过 `streamlit run streamlit_app.py` 启动，支持按市场筛选（美股、港股、A 股）；
-   - 首屏优先显示“今日机会雷达”（机会类型、触发价、止损价、机会分）；
-   - 顶部“股票面板”包含归一化走势、PE/历史分位、支撑位、入场评分，并新增 **量能指标速览**（当日成交量 vs 20 日均量、突增比率、OBV/VPT/VWAP/A/D 等）；
-   - “指标说明” 中可查看各指标及评分逻辑。
+1. **买点检测**：自动检测 watchlist 中的股票是否正在接近值得考虑的买点（回踩 MA50、放量突破等）
+2. **基本面过滤**：估值、增长质量、财务健康、公司事件综合评分
+3. **历史验证**：每类信号都能查看过去的样本表现、胜率和最大回撤
+4. **证据透明**：每个结论都能回溯到原始数据、触发条件和评分过程
+5. **每日变化**：首页自动高亮状态变化（新触发、进入/脱离观察区间、conviction 变化）
 
-## 价值锚点评分体系（100分）
+## 项目结构
 
-1. **估值吸引力 (30)**
-   - 历史估值分位：取 PE/PB/P.S（当前实现 PE、P.S）中最低分位，按 10/7/4/1/0 分。
-   - 绝对估值：按自由现金流收益率（≥6% 记 10 分）。
-   - 同业比较：将当前 PE/P.S 与同市场中位数比较，低 20% 记 10 分，近似 5 分，高 0 分。
+```
+src/research_workbench/
+├── config.py                 # 统一配置入口
+├── models.py                 # 核心数据模型
+├── ingestion/                # 数据采集与标准化
+│   └── watchlist.py          # Watchlist 加载与过滤
+├── research_store/           # 数据存储层
+│   ├── files.py              # Supabase + CSV 双路径读取
+│   └── schema.py             # 核心表 schema 定义
+├── signal_engine/            # 信号生成层
+│   ├── radar.py              # 触发检测 + 过滤 + 评分
+│   └── changes.py            # 每日状态变化检测
+├── validation/               # 历史验证层
+│   └── replay.py             # 触发回放 + 验证统计
+└── ui/                       # UI 边界（骨架级）
+    └── README.md
 
-2. **成长性与性价比 (30)**
-   - PEG：≤0.8 记 15 分，逐档递减；当前因 EPS 历史不足大多为 0。
-   - 增长质量：基于 TTM 营收、净利增速，利润增速 > 营收增速记满分。
+app.py                        # Streamlit 研究工作台主入口
+scripts/fetch_cn_data.py      # A 股基础数据拉取脚本 (yfinance)
+scripts/refresh.py            # 统一信号与快照刷新入口
+research_inputs/              # 输入数据（watchlist、手动事件）
+openbb_outputs/               # 输出数据（summary、history、signals）
+```
 
-3. **财务健康与股东回报 (20)**
-   - 资产负债表：净现金企业记 10 分，债务升高分值下降。
-   - 股东回报：最近四季回购 + 分红记 10 分，仅一项记 7 分，否则为 0。
-
-4. **技术面与市场情绪 (20)**
-   - 关键支撑：现价相对 20 日滚动支撑位的偏离程度。
-   - 情绪：依据 yfinance 的 `recommendationKey/Mean`（评级越悲观得分越高）。
-
-- **总分解释**：
-  - 80-100：黄金坑（积极建仓）；
-  - 60-79：白银坑（分批建仓）；
-  - 40-59：合理区（观望/持有）；
-  - <40：观望或高估。
-
-## 使用方法
+## 快速开始
 
 ### 1. 安装依赖
 
@@ -53,102 +44,87 @@
 pip install -r requirements.txt
 ```
 
-### 2. 配置 Supabase
-
-脚本与 Streamlit 默认使用以下环境变量（可在运行脚本的终端或系统环境中设置）：
+### 2. 配置 Supabase（可选）
 
 ```bash
-export SUPABASE_URL="https://wpyrevceqirzpwcpulqz.supabase.co"
-export SUPABASE_KEY="YOUR_SUPABASE_SERVICE_ROLE_OR_ANON_KEY"
-# 如有自定义表名，可覆盖默认值
-export SUPABASE_SUMMARY_TABLE="equity_metrics"
-export SUPABASE_HISTORY_TABLE="equity_metrics_history"
-export SUPABASE_ANALYST_TABLE="us_analyst_estimates"
-export SUPABASE_RADAR_TABLE="equity_opportunity_radar"
+export SUPABASE_URL="https://your-instance.supabase.co"
+export SUPABASE_KEY="your-key"
 ```
 
-> 默认值已写入脚本，若直接复用仓库提供的 Supabase 实例，可暂不设置。若部署到自己的 Supabase，请务必覆盖 URL/KEY。
+> 不配置 Supabase 时，系统会自动回退到本地 CSV 文件。
 
-### 3. 运行采集脚本（写入 Supabase + CSV）
+### 3. 配置 Watchlist
+
+编辑 `research_inputs/watchlist_cn.json`，添加你关注的 A 股标的：
+
+```json
+[
+  {
+    "symbol": "002624.SZ",
+    "name": "完美世界",
+    "market": "CN",
+    "sector": "传媒游戏",
+    "status": "watch",
+    "target_zone_low": 9.8,
+    "target_zone_high": 10.5,
+    "notes": "关注回踩 MA50 机会"
+  }
+]
+```
+
+### 4. 刷新数据
 
 ```bash
-source .venv311/bin/activate  # 如果使用本地虚拟环境
-python fetch_equities_fmp.py
-python fetch_us_analyst_estimates.py
+python scripts/fetch_cn_data.py        # 1. 从 Yahoo Finance 拉取 A 股基础行情与财务数据
+python scripts/refresh.py              # 2. 运行信号引擎，生成今日买卖点判定与快照
 ```
 
-两份脚本会：
-- 拉取/计算指标并生成 `openbb_outputs/*.csv`；
-- 将数据 upsert 到 Supabase（包含失败重试、冲突兜底逻辑）。
-
-> 建议在 Windows 任务计划程序、Linux `cron` 或 GitHub Actions 中定时运行，实现每日自动更新。
-
-### 4. 启动可视化（本地 / Streamlit Cloud）
+### 5. 启动工作台
 
 ```bash
-streamlit run streamlit_app.py
+streamlit run app.py
 ```
 
-Streamlit 应用会优先从 Supabase REST API 读取 `equity_metrics` / `equity_metrics_history` / `us_analyst_estimates`，仅当云端无数据时才回退到本地 CSV。
+工作台包含四个页面：
+- **首页**：今日重点变化、接近买点列表、基本面概览、公司事件、历史验证摘要
+- **单票页**：价格证据、基本面证据、事件信息、历史同类信号、可展开解释层
+- **验证页**：按触发类型的历史表现（胜率、平均收益、最大回撤）
+- **设置页**：数据路径与 watchlist 预览
 
-部署到 Streamlit Cloud 的步骤：
-1. Fork 本仓库；
-2. 在 App 的 Secrets 设置 `SUPABASE_URL` 与 `SUPABASE_KEY`；
-3. Cloud 会自动安装 `requirements.txt` 并运行 `streamlit_app.py`，即得公开访问链接。
+## 信号结构
 
-### 5. 自动更新建议
+每个信号包含以下关键字段：
 
-- **Windows**：任务计划程序 → 创建任务 → 触发器选“每日”，操作填  
-  `cmd /c "cd C:\path\openbb-agent && C:\Python311\python fetch_equities_fmp.py"`.
-- **Linux/NAS**：`crontab -e` 添加  
-  `0 7 * * * cd /path/openbb-agent && /usr/bin/python3 fetch_equities_fmp.py >> /path/log/equity.log 2>&1`.
-- **GitHub Actions**：建立 schedule workflow，runner 上执行两份脚本，适合无服务器成本的场景。
+| 字段 | 说明 |
+|------|------|
+| `signal_state` | watch / near_zone / triggered / invalidated |
+| `trigger_type` | pullback / breakout / none |
+| `trigger_score` | 触发得分 |
+| `valuation_score` | 估值得分 |
+| `quality_score` | 增长质量得分 |
+| `event_risk_score` | 近期事件风险分 |
+| `conviction_score` | 综合信心分 |
+| `reasons` | 信号原因（可回溯到具体数据） |
+| `invalidation_conditions` | 失效条件 |
 
-### 6. 机会雷达信号定义
+## 设计原则
 
-- `pullback`：回踩确认，价格接近 MA50 且在主支撑上方，并有量能确认。
-- `breakout`：放量突破，价格突破近 20 日高点且量能显著放大。
-- 建议先按 `opportunity_score` 排序，再结合 `risk_flags` 决定仓位。
+- 先形成可用闭环，再追求完整架构
+- 先服务少量标的深研究，再做全市场筛选
+- 每个结论都必须能回溯到原始数据
+- LLM 只作为可选解释层，不参与主判断
+- UI 仅为可替换骨架，业务逻辑不耦合展示
 
-### 7. 开盘自动邮件推送
+## 旧代码
 
-- 推送脚本：`scripts/send_radar_email.py`
-- 定时工作流：`.github/workflows/opening-radar-email.yml`
-- 默认收件人：`794166954@qq.com`
+以下内容已移入 `archive/`，不再是主流程依赖：
+- 加密货币相关脚本
+- 美股分析师预测脚本
+- 历史回填实验脚本
+- TradingAgents 适配器
 
-本地手动触发：
+旧的全市场 Streamlit 面板 (`streamlit_app.py`) 保留但不再是主入口。
 
-```bash
-python scripts/send_radar_email.py
-```
+## 数据采集
 
-必需环境变量：
-
-- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`
-- `MAIL_FROM`, `MAIL_TO`（默认会回退到 `794166954@qq.com`）
-
-> 注意：PEG、PB 等部分指标受限于免费数据源，若上市未满 5 年或数据缺失，对应分位会显示 `N/A`，`pe_coverage_years` / `ps_coverage_years` 会显示实际覆盖年限。
-
-## 后续迭代计划
-
-目前系统已经具备「多市场数据入库 + Supabase 统一供给 + Streamlit 展示」，但对投资决策的辅助仍有较大提升空间。接下来计划：
-
-1. **盘后日报与入场建议**  
-   - 每天收盘后自动扫描 Supabase，将 `entry_recommendation=建议入场` 的标的整理成日报，输出建议入场价、原因、触发条件。  
-   - 形式：脚本生成 Markdown/HTML，推送到 Telegram / 邮件 / n8n。
-
-2. **持仓与风控模块**  
-   - Streamlit 增设“持仓面板”，允许录入/导入持仓成本、仓位、目标仓。  
-   - 每日盘后基于 200 日均线、滚动支撑位自动计算挂单区间、止盈/止损价格。
-
-3. **AI 总结体系**  
-   - 利用 GPT/Gemini 会员，通过 n8n 工作流拉取指数、新闻、宏观数据，得到当日大盘点评、风险提示、事件驱动结论。  
-   - 参考 TauricResearch 达成“文字日报 + 结构化标签”的效果。
-
-4. **“量化执行投资系统 V6.1” 对齐**  
-   - **第一阶段 - 好公司过滤**：补齐经营现金流 vs 净利润、资产负债率、回购/管理层增持等硬性条款，不满足者永久剔除。  
-   - **第二阶段 - 好价格信号**：将 PE 分位、PEG、FCF Yield、200 日均线偏离、恐惧贪婪指数量化为总分 11 分，≥7 分触发买入。  
-   - **第三阶段 - 执行手册**：预计算试探仓/主力仓价格、初始止损、分批止盈、移动止盈、最大亏损金额等字段并写入 Supabase，供前端直接展示。  
-   - 形成“资格过滤 → 信号 → 风控”闭环，便于自动化决策与复盘。
-
-> 欢迎在 Issues 中提出其他需求或提交 PR，一起把系统升级为真正的「投前分析 + 交易信号 + 风控执行」一体化工具。
+主数据管道已重构为纯粹的 `scripts/fetch_cn_data.py`，专职从 `yfinance` 拉取 A 股数据，并剥离了对旧版复杂估值模型和多市场数据源的依赖。

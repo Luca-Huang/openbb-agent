@@ -1,0 +1,25 @@
+2025-11-30 22:03:57,386 | agents               | INFO     | config_manager:_init_mongodb_storage:154 | 🔧 [ConfigManager] 开始初始化 MongoDB 存储...
+2025-11-30 22:03:57,408 | agents               | INFO     | config_manager:_init_mongodb_storage:164 | 🔍 [ConfigManager] USE_MONGODB_STORAGE=false (解析为: False)
+2025-11-30 22:03:57,409 | agents               | INFO     | config_manager:_init_mongodb_storage:167 | ℹ️ [ConfigManager] MongoDB 存储未启用，将使用 JSON 文件存储
+2025-11-30 22:04:31,669 | agents               | INFO     | config_manager:_init_mongodb_storage:154 | 🔧 [ConfigManager] 开始初始化 MongoDB 存储...
+2025-11-30 22:04:31,675 | agents               | INFO     | config_manager:_init_mongodb_storage:164 | 🔍 [ConfigManager] USE_MONGODB_STORAGE=false (解析为: False)
+2025-11-30 22:04:31,676 | agents               | INFO     | config_manager:_init_mongodb_storage:167 | ℹ️ [ConfigManager] MongoDB 存储未启用，将使用 JSON 文件存储
+2025-11-30 22:04:51,923 | agents               | INFO     | config_manager:_init_mongodb_storage:154 | 🔧 [ConfigManager] 开始初始化 MongoDB 存储...
+2025-11-30 22:04:51,928 | agents               | INFO     | config_manager:_init_mongodb_storage:164 | 🔍 [ConfigManager] USE_MONGODB_STORAGE=false (解析为: False)
+2025-11-30 22:04:51,931 | agents               | INFO     | config_manager:_init_mongodb_storage:167 | ℹ️ [ConfigManager] MongoDB 存储未启用，将使用 JSON 文件存储
+2025-11-30 22:05:02,065 | httpx                | INFO     | _client:_send_single_request:1013 | HTTP Request: GET https://wpyrevceqirzpwcpulqz.supabase.co/rest/v1/equity_metrics_history?select=%2A&symbol=eq.META&as_of_date=gte.2022-12-01&order=as_of_date "HTTP/2 200 OK"
+2025-11-30 22:05:47,432 | agents               | INFO     | config_manager:_init_mongodb_storage:154 | 🔧 [ConfigManager] 开始初始化 MongoDB 存储...
+2025-11-30 22:05:47,434 | agents               | INFO     | config_manager:_init_mongodb_storage:164 | 🔍 [ConfigManager] USE_MONGODB_STORAGE=false (解析为: False)
+2025-11-30 22:05:47,435 | agents               | INFO     | config_manager:_init_mongodb_storage:167 | ℹ️ [ConfigManager] MongoDB 存储未启用，将使用 JSON 文件存储
+2025-11-30 22:05:55,819 | httpx                | INFO     | _client:_send_single_request:1013 | HTTP Request: GET https://wpyrevceqirzpwcpulqz.supabase.co/rest/v1/equity_metrics_history?select=%2A&symbol=eq.META&as_of_date=gte.2022-12-01&order=as_of_date "HTTP/2 200 OK"
+2025-11-30 22:06:04,862 | httpx                | INFO     | _client:_send_single_request:1013 | HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 401 Unauthorized"
+2025-11-30 22:10:23,055 | agents               | INFO     | config_manager:_init_mongodb_storage:154 | 🔧 [ConfigManager] 开始初始化 MongoDB 存储...
+2025-11-30 22:10:23,056 | agents               | INFO     | config_manager:_init_mongodb_storage:164 | 🔍 [ConfigManager] USE_MONGODB_STORAGE=false (解析为: False)
+2025-11-30 22:10:23,056 | agents               | INFO     | config_manager:_init_mongodb_storage:167 | ℹ️ [ConfigManager] MongoDB 存储未启用，将使用 JSON 文件存储
+2025-11-30 22:10:31,723 | httpx                | INFO     | _client:_send_single_request:1013 | HTTP Request: GET https://wpyrevceqirzpwcpulqz.supabase.co/rest/v1/equity_metrics_history?select=%2A&symbol=eq.META&as_of_date=gte.2022-12-01&order=as_of_date "HTTP/2 200 OK"
+2025-11-30 22:11:01,837 | httpx                | INFO     | _client:_send_single_request:1013 | HTTP Request: POST https://ark.cn-beijing.volces.com/api/v3/chat/completions "HTTP/1.1 200 OK"
+2025-11-30 22:11:01,847 | tools                | INFO     | logging_manager:log_module_start:361 | 📊 [模块开始] graph_signal_processing - 股票: META
+2025-11-30 22:11:01,851 | graph.signal_processing | INFO     | signal_processing:process_signal:63 | 🔍 [SignalProcessor] 处理信号: 股票=META, 市场=美股, 货币=美元
+2025-11-30 22:11:14,244 | httpx                | INFO     | _client:_send_single_request:1013 | HTTP Request: POST https://ark.cn-beijing.volces.com/api/v3/chat/completions "HTTP/1.1 200 OK"
+2025-11-30 22:11:14,245 | graph.signal_processing | INFO     | signal_processing:process_signal:203 | 🔍 [SignalProcessor] 处理结果: {'action': '买入', 'target_price': 704.12, 'confidence': 0.7, 'risk_score': 0.5, 'reasoning': 'RSI严重超卖短期反弹动能积蓄，中长期均线多头排列趋势未逆转，支撑位提供安全边际，形成“超卖+支撑”双重底部信号'}
+2025-11-30 22:11:14,245 | tools                | INFO     | logging_manager:log_module_complete:378 | 📊 [模块完成] graph_signal_processing - ✅ 成功 - 股票: META, 耗时: 12.40s

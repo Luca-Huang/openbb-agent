@@ -8,6 +8,7 @@ Steps:
 4. Upload to Supabase `equity_metrics_history`, chunking with retry to avoid HTTP issues.
 """
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,12 +19,15 @@ import pandas as pd
 import yfinance as yf
 from supabase import create_client
 
-SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
+DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
+DEFAULT_SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
 
-HISTORY_DAYS = 365 * 3
-RECENT_DAYS = 3
-OUTPUT_CSV = Path("openbb_outputs/equity_history_snapshot.csv")
+SUPABASE_URL = os.getenv("SUPABASE_URL", DEFAULT_SUPABASE_URL)
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", DEFAULT_SUPABASE_KEY)
+
+HISTORY_DAYS = int(os.getenv("EQUITY_HISTORY_DAYS", str(365 * 3)))
+RECENT_DAYS = int(os.getenv("EQUITY_RECENT_DAYS", "3"))
+OUTPUT_CSV = Path(os.getenv("EQUITY_HISTORY_CSV", "openbb_outputs/equity_history_snapshot.csv"))
 BATCH_SIZE = 200
 RETRY_LIMIT = 3
 
@@ -35,6 +39,10 @@ if cfg_path.exists():
     STOCKS = [item["symbol"] for item in cfg.get("equities", [])]
 else:
     STOCKS = ["MSFT", "AAPL"]
+
+env_symbols = os.getenv("EQUITY_SYMBOLS")
+if env_symbols:
+    STOCKS = [sym.strip().upper() for sym in env_symbols.split(",") if sym.strip()]
 
 
 def chunked(rows: List[Dict[str, object]], size: int = BATCH_SIZE):
@@ -120,7 +128,6 @@ def save_csv(records: List[Dict[str, object]]):
 
 
 def upload_records(records: List[Dict[str, object]]):
-    # Delete recent range only
     recent_cutoff = (datetime.utcnow().date() - pd.Timedelta(days=RECENT_DAYS)).isoformat()
     print(f"[INFO] cleaning Supabase equity_metrics_history for as_of_date >= {recent_cutoff}")
     client.table("equity_metrics_history").delete().gte("as_of_date", recent_cutoff).execute()

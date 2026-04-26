@@ -1,0 +1,23 @@
+[
+  {
+    "symbol": "002624.SZ",
+    "name": "完美世界",
+    "market": "CN",
+    "sector": "传媒游戏",
+    "status": "watch",
+    "target_zone_low": null,
+    "target_zone_high": null,
+    "notes": "示例自选股。后续请替换为你的 A 股重点跟踪列表。"
+  },
+  {
+    "symbol": "002241.SZ",
+    "name": "歌尔股份",
+    "market": "CN",
+    "sector": "消费电子",
+    "status": "watch",
+    "target_zone_low": null,
+    "target_zone_high": null,
+    "notes": "用户重点跟踪"
+  }
+]
+

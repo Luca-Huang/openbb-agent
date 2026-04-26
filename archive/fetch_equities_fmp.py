@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Fetch equity data via FMP (US) and yfinance (CN/HK) and evaluate entry signals.
 
 指标说明：
@@ -27,11 +27,7 @@ import numpy as np
 import pandas as pd
 import requests
 import yfinance as yf
-try:
-    from supabase import Client, create_client
-except ImportError:  # pragma: no cover - optional dependency
-    Client = None
-    create_client = None
+
 
 API_KEY = os.environ.get("FMP_API_KEY", "6GfWNQdQxymNoUiM2Be61I9oPDCzeNor")
 BASE_URL = "https://financialmodelingprep.com/stable"
@@ -40,18 +36,7 @@ EQUITY_CONFIG_PATH = Path(__file__).parent / "equity_config.json"
 RADAR_CONFIG_PATH = Path(__file__).parent / "radar_config.json"
 LOOKBACK_DAYS = 730
 PERCENTILE_LOOKBACK_DAYS = 5 * 365
-DEFAULT_SUPABASE_URL = "https://wpyrevceqirzpwcpulqz.supabase.co"
-DEFAULT_SUPABASE_KEY = (
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndweXJldmNlcWlyenB3Y3B1bHF6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMzODUzOTEsImV4cCI6MjA3ODk2MTM5MX0.vY-lSpINIwDc80Caq7tX6iQ_zcBaKDflO5AfV79-tZA"
-)
-SUPABASE_URL = os.environ.get("SUPABASE_URL", DEFAULT_SUPABASE_URL)
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", DEFAULT_SUPABASE_KEY)
-SUPABASE_SUMMARY_TABLE = os.environ.get("SUPABASE_SUMMARY_TABLE", "equity_metrics")
-SUPABASE_HISTORY_TABLE = os.environ.get("SUPABASE_HISTORY_TABLE", "equity_metrics_history")
-SUPABASE_RADAR_TABLE = os.environ.get("SUPABASE_RADAR_TABLE", "equity_opportunity_radar")
-SUPABASE_CHUNK_SIZE = int(os.environ.get("SUPABASE_CHUNK_SIZE", "50"))
-SUPABASE_MAX_RETRY = int(os.environ.get("SUPABASE_MAX_RETRY", "3"))
-SUPABASE_RETRY_WAIT = float(os.environ.get("SUPABASE_RETRY_WAIT", "2"))
+
 
 SUMMARY_UPLOAD_COLUMNS = [
     "symbol",
@@ -204,132 +189,7 @@ STOCKS: List[Dict[str, str]] = load_equity_universe()
 RADAR_CONFIG: Dict[str, Any] = load_radar_config()
 
 
-def get_supabase_client() -> Optional["Client"]:
-    if not SUPABASE_URL or not SUPABASE_KEY:
-        return None
-    if create_client is None:
-        print("[Supabase] `supabase` Python SDK 未安装，跳过上传。运行 `pip install supabase` 后重试。")
-        return None
-    try:
-        return create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[Supabase] 无法初始化客户端：{exc}")
-        return None
 
-
-def dataframe_to_records(df: pd.DataFrame, date_cols: Optional[List[str]] = None) -> List[Dict]:
-    out = df.copy()
-    if date_cols:
-        for col in date_cols:
-            if col in out.columns:
-                out[col] = pd.to_datetime(out[col], errors="coerce").dt.strftime("%Y-%m-%d")
-    return out.replace({np.nan: None}).to_dict(orient="records")
-
-
-def chunk_records(records: List[Dict], size: int) -> List[List[Dict]]:
-    return [records[i : i + size] for i in range(0, len(records), size)]
-
-
-def supabase_replace(
-    client: "Client", table: str, records: List[Dict], conflict_cols: List[str]
-) -> None:
-    for rec in records:
-        delete_query = client.table(table).delete()
-        for col in conflict_cols:
-            value = rec.get(col)
-            if value is None:
-                delete_query = None
-                break
-            delete_query = delete_query.eq(col, value)
-        if delete_query is None:
-            continue
-        delete_query.execute()
-    client.table(table).insert(records).execute()
-
-
-def supabase_upsert(
-    client: "Client", table: str, records: List[Dict], conflict_cols: List[str]
-) -> None:
-    if not client or not records:
-        return
-    conflict_clause = ",".join(conflict_cols)
-    for chunk in chunk_records(records, SUPABASE_CHUNK_SIZE):
-        attempt = 0
-        while attempt < SUPABASE_MAX_RETRY:
-            try:
-                client.table(table).upsert(chunk, on_conflict=conflict_clause).execute()
-                break
-            except Exception as exc:  # noqa: BLE001
-                if "42P10" in str(exc) or "no unique" in str(exc).lower():
-                    supabase_replace(client, table, chunk, conflict_cols)
-                    break
-                attempt += 1
-                print(f"[Supabase] {table} 上传失败（尝试 {attempt}/{SUPABASE_MAX_RETRY}）: {exc}")
-                if attempt >= SUPABASE_MAX_RETRY:
-                    raise
-                time.sleep(SUPABASE_RETRY_WAIT)
-
-
-def sync_to_supabase(summary_df: pd.DataFrame, history_df: pd.DataFrame) -> None:
-    client = get_supabase_client()
-    if not client:
-        if not SUPABASE_URL or not SUPABASE_KEY:
-            print("[Supabase] 未设置 SUPABASE_URL/SUPABASE_KEY，跳过云端缓存。")
-        return
-    try:
-        summary_upload = summary_df.copy()
-        for col in SUMMARY_UPLOAD_COLUMNS:
-            if col not in summary_upload.columns:
-                summary_upload[col] = np.nan
-        summary_upload = summary_upload[SUMMARY_UPLOAD_COLUMNS]
-        history_upload = history_df.copy()
-        history_upload = history_upload.rename(columns={"date": "as_of_date"})
-        if "support_level" in history_upload.columns and "support_level_primary" not in history_upload.columns:
-            history_upload["support_level_primary"] = history_upload["support_level"]
-        for col in HISTORY_UPLOAD_COLUMNS:
-            if col not in history_upload.columns:
-                history_upload[col] = np.nan
-        history_upload = history_upload[HISTORY_UPLOAD_COLUMNS]
-        summary_records = dataframe_to_records(
-            summary_upload,
-            ["start_date", "end_date", "best_close_date", "next_refresh_date"],
-        )
-        history_records = dataframe_to_records(
-            history_upload,
-            ["start_date", "end_date", "best_close_date", "next_refresh_date", "as_of_date"],
-        )
-        supabase_upsert(client, SUPABASE_SUMMARY_TABLE, summary_records, ["symbol"])
-        supabase_upsert(
-            client,
-            SUPABASE_HISTORY_TABLE,
-            history_records,
-            ["symbol", "as_of_date"],
-        )
-        print(f"[Supabase] 已同步 {len(summary_records)} 条 summary、{len(history_records)} 条 history 数据。")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[Supabase] 上传失败：{exc}")
-
-
-def sync_radar_to_supabase(radar_df: pd.DataFrame) -> None:
-    client = get_supabase_client()
-    if not client or radar_df.empty:
-        return
-    try:
-        upload = radar_df.copy()
-        for col in RADAR_UPLOAD_COLUMNS:
-            if col not in upload.columns:
-                upload[col] = np.nan
-        upload = upload[RADAR_UPLOAD_COLUMNS]
-        records = dataframe_to_records(upload, ["as_of_date"])
-        supabase_upsert(
-            client,
-            SUPABASE_RADAR_TABLE,
-            records,
-            ["symbol", "as_of_date"],
-        )
-        print(f"[Supabase] 已同步 {len(records)} 条机会雷达数据。")
-    except Exception as exc:  # noqa: BLE001
-        print(f"[Supabase] 机会雷达上传失败：{exc}")
 
 
 @dataclass
@@ -1397,8 +1257,7 @@ def main() -> None:
     radar_path = OUTPUT_DIR / "equity_opportunity_radar.csv"
     radar_df.to_csv(radar_path, index=False)
 
-    sync_to_supabase(summary_df, combined_df)
-    sync_radar_to_supabase(radar_df)
+
 
     print("Saved:", combined_path)
     print("Saved:", summary_path)

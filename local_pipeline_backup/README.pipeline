@@ -1,0 +1,27 @@
+# P.A.R.I. Data Pipeline (EOD Prices + Last-2Y Fundamentals)
+
+This folder contains minimal scripts to fetch:
+- **Daily close prices** for `META`, `1810.HK` (Xiaomi), `002624.SZ` (Perfect World) via **yfinance**.
+- **Last ~2 years (8 quarters)** of core fundamentals:
+  - **US/META** via **SEC EDGAR companyfacts (XBRL)**.
+  - **CN/Perfect World** via **AKShare** (Sina/Eastmoney financial reports).
+  - **HK/Xiaomi** via **AKShare** HK interfaces if present; otherwise leaves an empty placeholder and suggests parsing **HKEXnews**.
+
+> All network calls run on your machine when you execute the scripts.
+
+## Quickstart
+```bash
+pip install yfinance pandas requests python-dateutil akshare
+python fetch_prices.py
+python fetch_fundamentals.py   # set your SEC User-Agent in config.json
+python verify_and_merge.py
+```
+
+Artifacts are written to `outputs/`.
+
+## Sources (Authoritative)
+- yfinance docs: https://ranaroussi.github.io/yfinance/
+- SEC EDGAR XBRL APIs (companyfacts & concepts): https://www.sec.gov/search-filings/edgar-application-programming-interfaces
+- SEC `company_tickers.json` mapping (CIK lookup): https://www.sec.gov/about/webmaster-frequently-asked-questions
+- AKShare data dictionary & changelog for CN/HK financials: https://akshare.akfamily.xyz/data/index.html , https://akshare.akfamily.xyz/changelog.html
+- HKEXnews disclosures (if you choose to parse HK PDFs for HK fundamentals): https://www.hkexnews.hk/
