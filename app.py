@@ -20,6 +20,7 @@ from research_workbench.research_store.files import (
     load_radar,
     load_summary,
 )
+from research_workbench.signal_engine.action_advisor import advise_actions, format_action_text
 from research_workbench.signal_engine.changes import detect_daily_changes
 from research_workbench.signal_engine.radar import DEFAULT_RADAR_CONFIG, build_current_signals
 from research_workbench.validation.replay import (
@@ -152,6 +153,28 @@ def render_home(signals: pd.DataFrame, summary: pd.DataFrame, events: pd.DataFra
             hide_index=True,
         )
 
+    st.subheader("后续动作建议")
+    if signals.empty:
+        st.info("暂无信号，无法生成动作建议。")
+    else:
+        actions = advise_actions(signals)
+        if actions.empty:
+            st.info("暂无可展示的动作建议。")
+        else:
+            _PRIORITY_LABELS = {1: "🔴 紧急", 2: "🟡 重要", 3: "🔵 一般", 4: "⚪ 低"}
+            actions_display = actions.copy()
+            actions_display["优先级"] = actions_display["action_priority"].map(_PRIORITY_LABELS).fillna("⚪ 低")
+            action_cols = ["优先级", "symbol", "name", "signal_state", "action", "action_detail"]
+            present = [c for c in action_cols if c in actions_display.columns]
+            st.dataframe(
+                actions_display[present].rename(columns={
+                    "symbol": "代码", "name": "名称", "signal_state": "状态",
+                    "action": "建议动作", "action_detail": "详情",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+
     st.subheader("基本面过滤概览")
     if summary.empty:
         st.info("暂无 summary 数据。")
@@ -201,6 +224,57 @@ def render_stock_detail(symbol: str, history: pd.DataFrame, signals: pd.DataFram
         _render_card(b, "Trigger", str(row.get("trigger_type", "N/A")), "触发类型")
         _render_card(c, "Conviction", f"{float(row.get('conviction_score', 0.0)):.1f}", "综合信心分")
         _render_card(d, "Event Risk", f"{float(row.get('event_risk_score', 0.0)):.1f}", "近期事件风险")
+
+    # ---- Action Advice ----
+    st.subheader("📋 动作建议")
+    if not stock_signal.empty:
+        actions = advise_actions(stock_signal)
+        if not actions.empty:
+            act = actions.iloc[0]
+            _PRIORITY_COLORS = {1: "#dc2626", 2: "#d97706", 3: "#2563eb", 4: "#6b7280"}
+            _PRIORITY_LABELS = {1: "紧急", 2: "重要", 3: "一般", 4: "低"}
+            pri = int(act.get("action_priority", 4))
+            pri_color = _PRIORITY_COLORS.get(pri, "#6b7280")
+            pri_label = _PRIORITY_LABELS.get(pri, "低")
+
+            st.markdown(
+                f"""
+                <div class='rw-card'>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div style="font-size:1.1rem;font-weight:700;color:#0f172a;">{act['action']}</div>
+                        <span style="display:inline-block;padding:3px 10px;border-radius:6px;
+                               background:{pri_color};color:white;font-size:0.8rem;">{pri_label}</span>
+                    </div>
+                    <div style="color:#475569;font-size:0.9rem;margin-top:8px;white-space:pre-line;">{act['action_detail']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Entry plan (only for triggered stocks)
+            entry = act.get("suggested_entry")
+            if entry is not None and pd.notna(entry):
+                st.markdown("**入场计划参考**")
+                e1, e2, e3, e4 = st.columns(4)
+                _render_card(e1, "入场参考", f"{float(entry):.2f}", "当前收盘价")
+                stop = act.get("suggested_stop")
+                if stop is not None and pd.notna(stop):
+                    risk_pct = (float(entry) - float(stop)) / float(entry) * 100
+                    _render_card(e2, "止损位", f"{float(stop):.2f}", f"风险 {risk_pct:.1f}%")
+                tp1 = act.get("suggested_tp1")
+                if tp1 is not None and pd.notna(tp1):
+                    gain_pct = (float(tp1) - float(entry)) / float(entry) * 100
+                    _render_card(e3, "止盈1 (1R)", f"{float(tp1):.2f}", f"收益 {gain_pct:.1f}%")
+                tp2 = act.get("suggested_tp2")
+                if tp2 is not None and pd.notna(tp2):
+                    gain_pct2 = (float(tp2) - float(entry)) / float(entry) * 100
+                    _render_card(e4, "止盈2 (2R)", f"{float(tp2):.2f}", f"收益 {gain_pct2:.1f}%")
+
+                sizing = act.get("position_sizing_note", "")
+                if sizing:
+                    st.caption(sizing)
+    else:
+        st.info("暂无信号，无法生成动作建议。")
 
     st.subheader("价格证据")
     if stock_history.empty:
