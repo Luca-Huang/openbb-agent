@@ -22,6 +22,11 @@ DEFAULT_RADAR_CONFIG: dict[str, Any] = {
     "risk": {
         "max_drawdown_60d_penalty_start": 0.22,
     },
+    "exits": {
+        "tp1_r_multiple": 1.0,
+        "tp2_r_multiple": 2.0,
+        "trailing_atr_multiple": 1.5,
+    },
 }
 
 
@@ -44,7 +49,57 @@ def add_radar_features(df: pd.DataFrame, cfg: dict[str, Any] | None = None) -> p
     rolling_peak = close.rolling(window=60, min_periods=1).max()
     enriched["drawdown_60d"] = (rolling_peak - close) / rolling_peak.replace(0, np.nan)
     enriched["dollar_volume20"] = (close * volume).rolling(window=20, min_periods=1).mean()
+    enriched["ma20"] = close.rolling(window=20, min_periods=1).mean()
+    enriched["highest_close_20d"] = close.rolling(window=lookback_high, min_periods=1).max()
     return enriched
+
+
+def compute_exit_plan(
+    entry_price: float,
+    stop_price: float,
+    atr14: float | None = None,
+    ma20: float | None = None,
+    highest_close_20d: float | None = None,
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    """Compute exit plan levels (TP1, TP2, trailing stop) from entry and stop.
+
+    R = entry_price - stop_price (the "risk" per share).
+    TP1 = entry + R × tp1_r_multiple  (default 1R)
+    TP2 = entry + R × tp2_r_multiple  (default 2R)
+    Trailing stop = max(ma20, highest_close_20d - atr14 × trailing_atr_multiple)
+    """
+    cfg = cfg or {}
+    tp1_mult = float(cfg.get("tp1_r_multiple", 1.0))
+    tp2_mult = float(cfg.get("tp2_r_multiple", 2.0))
+    trail_atr_mult = float(cfg.get("trailing_atr_multiple", 1.5))
+
+    R = entry_price - stop_price
+    if R <= 0:
+        R = entry_price * 0.08  # fallback: 8% of entry
+
+    tp1 = entry_price + R * tp1_mult
+    tp2 = entry_price + R * tp2_mult
+
+    # Trailing stop: pick the higher of MA20 and (highest_close - ATR trail)
+    trail_candidates: list[float] = [stop_price]
+    if ma20 is not None and not pd.isna(ma20):
+        trail_candidates.append(float(ma20))
+    if (
+        highest_close_20d is not None
+        and not pd.isna(highest_close_20d)
+        and atr14 is not None
+        and not pd.isna(atr14)
+    ):
+        trail_candidates.append(float(highest_close_20d) - float(atr14) * trail_atr_mult)
+
+    trailing_stop = max(trail_candidates)
+
+    return {
+        "take_profit_1": tp1,
+        "take_profit_2": tp2,
+        "trailing_stop": trailing_stop,
+    }
 
 
 def detect_trigger_type(latest_row: pd.Series, trigger_cfg: dict[str, Any]) -> str | None:
