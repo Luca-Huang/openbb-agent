@@ -1,0 +1,2 @@
+as_of_date,priority_rank,symbol,market,trigger_type,trigger_price,stop_price,opportunity_score,risk_flags,reason_1line,value_score,volume_spike_ratio,drawdown_60d,atr14,dollar_volume20
+2026-02-23,1,LLY,US,pullback,1058.56005859375,1103.806024169922,13.889808954230958,atr_high,回踩确认，量能比 1.29,11.0,1.2889808954230957,0.04629068735683457,46.834987095424104,3843260040.6643677
