@@ -1,0 +1,21 @@
+{
+  "_doc": "Personal holdings — copy this to holdings.json (gitignored) and fill in real trades. Each position holds the chronological BUY/SELL log; current shares and cost are derived. Code is the bare A-share digit code matching akshare.",
+  "positions": [
+    {
+      "code": "002602",
+      "name": "世纪华通",
+      "trades": [
+        {"date": "2025-09-09", "side": "BUY",  "price": 17.98, "shares": 400},
+        {"date": "2025-09-11", "side": "BUY",  "price": 18.90, "shares": 400},
+        {"date": "2025-09-24", "side": "SELL", "price": 21.15, "shares": 400}
+      ]
+    },
+    {
+      "code": "002241",
+      "name": "歌尔股份",
+      "trades": [
+        {"date": "2025-09-23", "side": "BUY", "price": 35.66, "shares": 200}
+      ]
+    }
+  ]
+}

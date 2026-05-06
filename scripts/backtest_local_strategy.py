@@ -169,8 +169,17 @@ PW_TRADES = [
     {"date": "2026-02-06", "side": "SELL", "price": 19.57, "shares": 1000},
 ]
 
+GOERTEK_TRADES = [
+    {"date": "2025-09-23", "side": "BUY", "price": 35.66, "shares": 200},
+    {"date": "2025-10-28", "side": "BUY", "price": 33.60, "shares": 100},
+    {"date": "2025-12-12", "side": "BUY", "price": 28.78, "shares": 100},
+    {"date": "2026-01-22", "side": "BUY", "price": 28.99, "shares": 200},
+    {"date": "2026-01-29", "side": "BUY", "price": 26.48, "shares": 400},
+]
+
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     report("Huatong",        "002602", HUATONG_TRADES, "20240101", "20260505")
     report("PerfectWorld_v2", "002624", PW_TRADES,     "20240101", "20260505")
+    report("GoerTek_v2",     "002241", GOERTEK_TRADES, "20240101", "20260505")

@@ -5,3 +5,7 @@ openbb_outputs/crypto/*.json
 openbb_outputs/crypto/crypto_support_dashboard.csv
 openbb_outputs/three_month_close_history.csv
 openbb_outputs/three_month_summary.csv
+logs/streamlit.*.log
+
+# Personal trade history — never commit
+research_inputs/holdings.json

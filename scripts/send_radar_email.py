@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import smtplib
+import sys
 from datetime import datetime, time, timezone
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -18,6 +20,10 @@ ROOT = Path(__file__).resolve().parents[1]
 RADAR_PATH = ROOT / "openbb_outputs" / "equity_opportunity_radar.csv"
 SUMMARY_PATH = ROOT / "openbb_outputs" / "three_month_summary.csv"
 SEND_LOG_PATH = ROOT / "openbb_outputs" / "radar_email_sent_log.json"
+HOLDINGS_PATH = ROOT / "research_inputs" / "holdings.json"
+
+sys.path.insert(0, str(ROOT / "src"))
+log = logging.getLogger("send_radar_email")
 
 DEFAULT_MAIL_TO = "794166954@qq.com"
 
@@ -76,9 +82,13 @@ def load_radar_dataframe() -> pd.DataFrame:
                 "trigger_type": "watchlist",
                 "trigger_price": summary.get("end_close"),
                 "stop_price": summary.get("support_level_primary"),
+                "take_profit_1": "",
+                "take_profit_2": "",
+                "trailing_stop": "",
                 "opportunity_score": summary.get("value_score"),
                 "risk_flags": "",
                 "reason_1line": summary.get("entry_recommendation").fillna("候选观察"),
+                "exit_plan": "",
             }
         )
     else:
@@ -91,12 +101,90 @@ def load_radar_dataframe() -> pd.DataFrame:
     return df
 
 
+def _fetch_history_for_holding(code: str, lookback_days: int = 400) -> pd.DataFrame:
+    """Pull daily OHLCV via akshare and bolt on the indicator schema the
+    backtest module needs.  Imports inside the function so the email path
+    keeps working when akshare/network is unavailable for the watchlist
+    section.
+    """
+    for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
+             "all_proxy", "ALL_PROXY"):
+        os.environ.pop(k, None)
+    os.environ["NO_PROXY"] = "*"
+    import urllib.request as _u
+    _u.getproxies = lambda: {}
+
+    import akshare as ak
+    import numpy as np
+    from research_workbench.signal_engine.radar import add_radar_features
+
+    end = datetime.now().date()
+    start = (end - pd.Timedelta(days=lookback_days)).strftime("%Y%m%d")
+    raw = ak.stock_zh_a_hist(symbol=code, period="daily",
+                             start_date=start, end_date=end.strftime("%Y%m%d"),
+                             adjust="qfq")
+    raw.columns = ["date", "code", "open", "close", "high", "low",
+                   "volume", "amount", "amplitude", "pct_chg", "chg", "turnover"]
+    raw["date"] = pd.to_datetime(raw["date"])
+    for c in ("open", "close", "high", "low", "volume"):
+        raw[c] = pd.to_numeric(raw[c], errors="coerce")
+    raw["symbol"] = code
+    d = raw.sort_values("date").copy()
+
+    # Mirror fetch_cn_data.py upstream indicator schema
+    close = d["close"]
+    d["ma50"] = close.rolling(50, min_periods=1).mean()
+    d["ma200"] = close.rolling(200, min_periods=1).mean()
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14, min_periods=14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14, min_periods=14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    d["rsi14"] = 100 - 100 / (1 + rs)
+    rolling_min = close.rolling(20, min_periods=1).min()
+    d["support_level_primary"] = rolling_min
+    d["support_level_secondary"] = rolling_min * 1.1
+    d["volume_ma20"] = d["volume"].rolling(20, min_periods=1).mean()
+    d["volume_spike_ratio"] = d["volume"] / d["volume_ma20"]
+    return add_radar_features(d)
+
+
+def build_holdings_section_html() -> str:
+    """Best-effort holdings section. Returns empty string on any failure so a
+    transient akshare hiccup never blocks the main radar email.
+
+    Set ``RADAR_SKIP_HOLDINGS=1`` to disable (used by tests / CI to avoid
+    pulling network data).
+    """
+    if os.environ.get("RADAR_SKIP_HOLDINGS"):
+        return ""
+    if not HOLDINGS_PATH.exists():
+        return ""
+    try:
+        from research_workbench.signal_engine.holdings_tracker import (
+            analyze_holding, load_holdings, render_holding_cards_html,
+        )
+        positions = load_holdings(HOLDINGS_PATH)
+        if not positions:
+            return ""
+        snapshots = []
+        for p in positions:
+            try:
+                history = _fetch_history_for_holding(p.code)
+                snapshots.append(analyze_holding(history, p))
+            except Exception as exc:  # noqa: BLE001 — keep email resilient
+                log.warning("holdings analysis failed for %s: %s", p.code, exc)
+        return render_holding_cards_html(snapshots)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("holdings section build failed: %s", exc)
+        return ""
+
+
 def build_email_html(df: pd.DataFrame, as_of_date: str) -> str:
     if df.empty:
         return f"<p>{as_of_date} 无可发送的机会雷达候选。</p>"
 
     display = df.copy()
-    for col in ["trigger_price", "stop_price", "opportunity_score"]:
+    for col in ["trigger_price", "stop_price", "take_profit_1", "take_profit_2", "trailing_stop", "opportunity_score"]:
         if col in display.columns:
             display[col] = pd.to_numeric(display[col], errors="coerce")
     display["trigger_type"] = display.get("trigger_type", "").map(
@@ -109,25 +197,33 @@ def build_email_html(df: pd.DataFrame, as_of_date: str) -> str:
             "trigger_type": "机会类型",
             "trigger_price": "触发价",
             "stop_price": "止损价",
+            "take_profit_1": "止盈1",
+            "take_profit_2": "止盈2",
+            "trailing_stop": "移动止盈",
             "opportunity_score": "机会分",
             "risk_flags": "风险标记",
             "reason_1line": "一句话理由",
+            "exit_plan": "止盈说明",
         }
     )
 
-    for col in ["市场", "标的", "机会类型", "触发价", "止损价", "机会分", "风险标记", "一句话理由"]:
+    columns = ["市场", "标的", "机会类型", "触发价", "止损价", "止盈1", "止盈2", "移动止盈", "机会分", "风险标记", "一句话理由", "止盈说明"]
+    for col in columns:
         if col not in display.columns:
             display[col] = ""
 
-    table = display[
-        ["市场", "标的", "机会类型", "触发价", "止损价", "机会分", "风险标记", "一句话理由"]
-    ].to_html(index=False, border=0)
+    table = display[columns].to_html(index=False, border=0)
+    holdings_section = build_holdings_section_html()
 
     return f"""
     <html>
       <body>
         <h2>开盘机会雷达 - {as_of_date}</h2>
-        <p>以下为开盘窗口内可执行候选，请结合仓位纪律与止损规则执行。</p>
+        {holdings_section}
+        <h3 style="margin-bottom:4px;">机会雷达候选</h3>
+        <p style="color:#666;font-size:12px;margin-top:0;">
+          以下为开盘窗口内可执行候选，请结合仓位纪律、止损规则与分批止盈计划执行。
+        </p>
         {table}
       </body>
     </html>
