@@ -9,5 +9,6 @@ logs/streamlit.*.log
 
 # Personal trade history — never commit
 research_inputs/holdings.json
+outputs/holdings_snapshots/
 .claude/
 .env

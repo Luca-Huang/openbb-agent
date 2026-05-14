@@ -64,7 +64,11 @@ class HoldingSnapshot:
     rsi14: float
     vol_spike: float
 
-    # Suggested exit plan (price levels, not amounts)
+    # Suggested exit plan (price levels, not amounts).
+    # When holdings > 0 these are anchored on the user's avg_cost so that
+    # "TP1 reached" / "stop violated" are actually meaningful for the current
+    # position.  When holdings == 0 they're anchored on today's close (the
+    # hypothetical "if I entered today" plan).
     stop_price: float
     take_profit_1: float
     take_profit_2: float
@@ -72,6 +76,7 @@ class HoldingSnapshot:
 
     action: str                   # high-level recommendation
     note: str                     # one-line explanation
+    priority: int = 4             # 1=urgent (清仓) … 4=low (持有/观察)
 
 
 def load_holdings(path: Path) -> list[Position]:
@@ -97,38 +102,104 @@ def _safe_pct(numerator: float | None, denominator: float | None) -> float:
 
 
 def _classify_action(
-    pnl: Any,
-    holdings: float,
+    *,
+    has_holdings: bool,
+    last_close: float,
     trigger_type: str,
+    floating_pnl_pct: float,
     pct_to_ma50: float,
     pct_to_ma200: float,
-) -> tuple[str, str]:
-    """Decide a human-readable recommendation.
+    stop_price: float,
+    take_profit_1: float,
+    take_profit_2: float,
+    trailing_stop: float,
+) -> tuple[str, str, int]:
+    """Decide a clear directive plus a priority bucket.
 
-    Rules — kept simple on purpose, read top-to-bottom:
-      1. No holdings + ACCEPT trigger → '可考虑建仓'
-      2. No holdings + no trigger      → '空仓观察'
-      3. Holding + ACCEPT trigger      → '可考虑加仓'
-      4. Holding + close > MA50 + close > MA200 → '持有不动'
-      5. Holding + close < MA50 < MA200          → '风险升高，考虑减仓'
-      6. Otherwise (holding, mixed)              → '观察 MA50 突破/破位'
+    Returns ``(action, note, priority)`` where priority is:
+      1 = urgent (清仓 / 严重风险)
+      2 = important (减仓 / 落袋)
+      3 = opportunity (加仓 / 建仓)
+      4 = no-op (持有 / 观察)
+
+    The goal is **明确指令** — avoid hedging wording like '考虑' / '可能',
+    so the user is either told to do something or told to do nothing.
+
+    Priority-ordered evaluation (first match wins):
+      A. No holdings:
+         - ACCEPT trigger          → 建仓
+         - else                    → 空仓观察
+      B. Holdings:
+         1. close ≤ stop_price     → 清仓 (stop violated)
+         2. close < MA50 < MA200 AND pnl < -10%
+                                   → 清仓 (trend broken + heavy loss)
+         3. close ≥ TP2            → 减仓 50% (TP2 落袋)
+         4. close ≥ TP1            → 减仓 25% (TP1 落袋)
+         5. close < trailing_stop  → 减仓 25% (跌破移动止损)
+         6. close < MA50 (still above MA200)
+                                   → 减仓 25% (结构走弱)
+         7. ACCEPT + pullback      → 加仓
+         8. close > MA50 AND close > MA200
+                                   → 持有不动 (趋势完好)
+         9. fallback               → 持有观察
     """
-    has_pos = holdings > 0
     accept = trigger_type in {"breakout", "pullback"}
     above_ma50 = pct_to_ma50 > 0
     above_ma200 = pct_to_ma200 > 0
 
-    if not has_pos:
+    if not has_holdings:
         if accept:
-            return "可考虑建仓", f"今日触发 {trigger_type}"
-        return "空仓观察", "等待 ACCEPT 信号"
-    if accept:
-        return "可考虑加仓", f"今日触发 {trigger_type}"
+            return ("建仓", f"今日触发 {trigger_type} 信号", 3)
+        return ("空仓观察", "等待 ACCEPT 信号", 4)
+
+    # 1. 止损线已破 — 清仓
+    if pd.notna(stop_price) and last_close <= float(stop_price):
+        return ("清仓", f"已跌破止损线 {stop_price:.2f}", 1)
+
+    # 2. 趋势完全破坏 + 重亏 — 清仓
+    if (
+        not above_ma50
+        and not above_ma200
+        and pd.notna(floating_pnl_pct)
+        and floating_pnl_pct < -0.10
+    ):
+        return (
+            "清仓",
+            f"MA50/MA200 同时跌破且浮亏 {floating_pnl_pct*100:.1f}%，趋势已破",
+            1,
+        )
+
+    # 3. 触及 TP2 — 减仓 50% 落袋
+    if pd.notna(take_profit_2) and last_close >= float(take_profit_2):
+        return ("减仓 50%", f"已达 TP2 {take_profit_2:.2f}，落袋一半", 2)
+
+    # 4. 触及 TP1 — 减仓 25%
+    if pd.notna(take_profit_1) and last_close >= float(take_profit_1):
+        return ("减仓 25%", f"已达 TP1 {take_profit_1:.2f}，落袋 25%", 2)
+
+    # 5. 跌破移动止损 — 减仓 25%（趋势中保护盈利）
+    if (
+        pd.notna(trailing_stop)
+        and pd.notna(stop_price)
+        and float(trailing_stop) > float(stop_price)
+        and last_close < float(trailing_stop)
+    ):
+        return ("减仓 25%", f"跌破移动止损 {trailing_stop:.2f}", 2)
+
+    # 6. 跌破 MA50（还在 MA200 上）— 减仓 25%
+    if not above_ma50 and above_ma200:
+        return ("减仓 25%", "跌破 MA50，结构走弱", 2)
+
+    # 7. ACCEPT pullback — 加仓机会
+    if accept and trigger_type == "pullback":
+        return ("加仓", "回踩支撑触发 pullback 信号", 3)
+
+    # 8. 趋势完好 — 持有
     if above_ma50 and above_ma200:
-        return "持有不动", "趋势结构未破"
-    if not above_ma50 and not above_ma200:
-        return "风险升高，考虑减仓", "已跌破 MA50 且仍在 MA200 之下"
-    return "观察 MA50 突破/破位", "处在均线枢纽位"
+        return ("持有不动", "趋势完好，站稳 MA50/MA200", 4)
+
+    # 9. 兜底
+    return ("持有观察", "结构中性，等待方向", 4)
 
 
 def analyze_holding(
@@ -156,14 +227,20 @@ def analyze_holding(
     trigger = detect_trigger_type(last, trigger_cfg) or ""
     verdict = "ACCEPT" if trigger in {"breakout", "pullback"} else "REJECT"
 
-    # Exit plan always anchored on the latest close — this answers
-    # "if I trade at today's price, where do the levels sit?", which is the
-    # relevant question whether the user is adding, building fresh, or just
-    # wants a trailing-stop reference for the existing position.
+    # Exit-plan anchor:
+    #   • holdings > 0 → anchor on avg_cost so TP / stop are meaningful for
+    #     the user's actual position ("did MY position hit TP1?").
+    #   • holdings == 0 → anchor on today's close (the hypothetical "if I
+    #     entered today, where would the levels sit?").
     support_primary = pd.to_numeric(last.get("support_level_primary"), errors="coerce")
     ma50 = pd.to_numeric(last.get("ma50"), errors="coerce")
     ma200 = pd.to_numeric(last.get("ma200"), errors="coerce")
-    entry_for_plan = last_close
+
+    if pnl.holdings > 0 and pnl.avg_cost > 0:
+        entry_for_plan = float(pnl.avg_cost)
+    else:
+        entry_for_plan = last_close
+
     # Choose a stop strictly below entry: prefer 20-day support, fall back to
     # MA50 then MA200 then a fixed 8% buffer.
     candidate_stops = [
@@ -187,9 +264,20 @@ def analyze_holding(
     pct_to_ma200 = _safe_pct(last_close, last.get("ma200"))
     pct_to_support = _safe_pct(last_close, last.get("support_level_primary"))
 
-    action, note = _classify_action(
-        pnl=pnl, holdings=pnl.holdings, trigger_type=trigger,
-        pct_to_ma50=pct_to_ma50, pct_to_ma200=pct_to_ma200,
+    tp1_val = plan.get("take_profit_1")
+    tp2_val = plan.get("take_profit_2")
+    trail_val = plan.get("trailing_stop")
+    action, note, priority = _classify_action(
+        has_holdings=pnl.holdings > 0,
+        last_close=last_close,
+        trigger_type=trigger,
+        floating_pnl_pct=pnl.floating_pnl_pct if pnl.holdings > 0 else float("nan"),
+        pct_to_ma50=pct_to_ma50,
+        pct_to_ma200=pct_to_ma200,
+        stop_price=float(stop_for_plan),
+        take_profit_1=float(tp1_val) if pd.notna(tp1_val) else float("nan"),
+        take_profit_2=float(tp2_val) if pd.notna(tp2_val) else float("nan"),
+        trailing_stop=float(trail_val) if pd.notna(trail_val) else float("nan"),
     )
 
     return HoldingSnapshot(
@@ -219,6 +307,7 @@ def analyze_holding(
         trailing_stop=float(plan.get("trailing_stop")) if pd.notna(plan.get("trailing_stop")) else float("nan"),
         action=action,
         note=note,
+        priority=priority,
     )
 
 
@@ -246,13 +335,15 @@ def _verdict_badge(verdict: str, trigger: str) -> str:
 
 
 def _action_color(action: str) -> str:
+    if "清仓" in action:
+        return "#dc3545"          # red — urgent exit
+    if "减仓" in action:
+        return "#fd7e14"          # orange — partial trim
     if "建仓" in action or "加仓" in action:
-        return "#28a745"
-    if "减仓" in action or "风险" in action:
-        return "#dc3545"
-    if "持有" in action:
-        return "#17a2b8"
-    return "#6c757d"
+        return "#28a745"          # green — entry / add
+    if "持有不动" in action:
+        return "#17a2b8"          # teal — keep
+    return "#6c757d"              # gray — observe
 
 
 def render_holding_card(snap: HoldingSnapshot) -> str:
@@ -306,6 +397,114 @@ def render_holding_cards_html(snapshots: Iterable[HoldingSnapshot]) -> str:
     """.strip()
 
 
+# ---------- Daily snapshot persistence + yesterday diff ----------
+
+# These power the "明确指令 + 昨日分析" UX: every refresh writes a snapshot,
+# and the next day's UI / email can show what changed.  The diff lives next
+# to the action so the user can see *why* today is different — the strongest
+# anti-impulse signal is "nothing changed, still 持有不动".
+
+
+def _snapshot_record(snap: HoldingSnapshot) -> dict[str, Any]:
+    """Subset of HoldingSnapshot needed for the diff.  Kept small and
+    JSON-serialisable.  Absolute amounts (holdings, broker_cost) are NOT
+    persisted — the diff only needs decision-relevant fields.
+    """
+    def _maybe_float(x: float) -> float | None:
+        return None if x is None or pd.isna(x) else float(x)
+
+    return {
+        "code": snap.code,
+        "name": snap.name,
+        "last_date": snap.last_date,
+        "last_close": _maybe_float(snap.last_close),
+        "floating_pnl_pct": _maybe_float(snap.floating_pnl_pct),
+        "trigger_type": snap.trigger_type,
+        "verdict": snap.verdict,
+        "pct_to_ma50": _maybe_float(snap.pct_to_ma50),
+        "pct_to_ma200": _maybe_float(snap.pct_to_ma200),
+        "stop_price": _maybe_float(snap.stop_price),
+        "action": snap.action,
+        "priority": snap.priority,
+        "note": snap.note,
+    }
+
+
+def save_snapshot(
+    snapshots: Iterable[HoldingSnapshot],
+    outdir: Path,
+    as_of: str | None = None,
+) -> Path:
+    """Write today's snapshot to ``outdir/YYYY-MM-DD.json``.
+
+    ``as_of`` defaults to today (local date).  Overwrites if the same date
+    already has a snapshot (idempotent on intra-day re-runs).
+    """
+    snaps = list(snapshots)
+    if as_of is None:
+        as_of = pd.Timestamp.today().strftime("%Y-%m-%d")
+    outdir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "as_of": as_of,
+        "positions": [_snapshot_record(s) for s in snaps],
+    }
+    out = outdir / f"{as_of}.json"
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                   encoding="utf-8")
+    return out
+
+
+def load_previous_snapshot(outdir: Path, before: str | None = None) -> dict[str, Any] | None:
+    """Return the most recent snapshot strictly older than ``before`` (today).
+
+    Returns None if no prior snapshot exists.  Filenames are sorted lexically
+    which works because the format is YYYY-MM-DD.
+    """
+    if not outdir.exists():
+        return None
+    if before is None:
+        before = pd.Timestamp.today().strftime("%Y-%m-%d")
+    candidates = sorted(
+        p for p in outdir.glob("*.json")
+        if p.stem < before
+    )
+    if not candidates:
+        return None
+    latest = candidates[-1]
+    try:
+        return json.loads(latest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def diff_against_previous(
+    today: HoldingSnapshot,
+    previous: dict[str, Any] | None,
+) -> str:
+    """One-line human-readable diff vs the previous snapshot.
+
+    Output examples:
+      - 无昨日数据                       (no prior snapshot)
+      - 延续 (持有不动)                   (action unchanged)
+      - 昨日 持有不动 → 今日 减仓 25%      (action changed)
+      - 昨日 持有不动 → 今日 清仓 · 已跌破止损线 17.50  (with note)
+    """
+    if previous is None:
+        return "无昨日数据"
+
+    yesterday_positions = {p["code"]: p for p in previous.get("positions", [])}
+    prior = yesterday_positions.get(today.code)
+    if prior is None:
+        return "新持仓 (昨日无记录)"
+
+    yesterday_action = str(prior.get("action", ""))
+    if yesterday_action == today.action:
+        return f"延续 ({today.action})"
+
+    as_of = previous.get("as_of", "昨日")
+    return f"{as_of} {yesterday_action} → 今日 {today.action}"
+
+
 __all__ = [
     "Position",
     "HoldingSnapshot",
@@ -313,4 +512,7 @@ __all__ = [
     "analyze_holding",
     "render_holding_card",
     "render_holding_cards_html",
+    "save_snapshot",
+    "load_previous_snapshot",
+    "diff_against_previous",
 ]
