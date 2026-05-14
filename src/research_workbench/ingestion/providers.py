@@ -175,16 +175,33 @@ class DataProvider(ABC):
 # ---------------------------------------------------------------------------
 
 class AKShareCNProvider(DataProvider):
-    """A-share data via AKShare (东方财富/新浪 source)."""
+    """A-share data via AKShare (东方财富/新浪 source).
+
+    Falls back to yfinance when AKShare fails or returns empty — yfinance
+    natively understands ``002602.SZ`` / ``600519.SH`` style tickers and
+    works from networks where AKShare's upstream endpoints are blocked
+    or flaky.
+    """
 
     market = "CN"
 
     def fetch_history(
         self, symbol: str, start: date, end: date
     ) -> pd.DataFrame:
-        import akshare as ak
+        df = self._fetch_via_akshare(symbol, start, end)
+        if not df.empty:
+            return df
+        log.warning("AKShare returned no data for %s, falling back to yfinance", symbol)
+        return self._fetch_via_yfinance(symbol, start, end)
 
-        # Convert '002241.SZ' to '002241' for akshare
+    @staticmethod
+    def _fetch_via_akshare(symbol: str, start: date, end: date) -> pd.DataFrame:
+        try:
+            import akshare as ak
+        except ImportError:
+            log.warning("akshare not installed; skipping primary fetch path")
+            return pd.DataFrame()
+
         ak_symbol = symbol.split(".")[0]
         log.info("AKShare: fetching history for %s (%s → %s)", symbol, start, end)
         try:
@@ -195,11 +212,11 @@ class AKShareCNProvider(DataProvider):
                 end_date=end.strftime("%Y%m%d"),
                 adjust="qfq",
             )
-        except Exception as e:
-            log.error("AKShare fetch failed for %s: %s", symbol, e)
+        except Exception as e:  # noqa: BLE001 — network errors → fall through
+            log.warning("AKShare fetch failed for %s: %s", symbol, e)
             return pd.DataFrame()
 
-        if df.empty:
+        if df is None or df.empty:
             return pd.DataFrame()
 
         df = df.rename(columns={
@@ -212,6 +229,41 @@ class AKShareCNProvider(DataProvider):
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
         time.sleep(1)  # rate limiting
+        return df[["date", "symbol", "open", "high", "low", "close", "volume"]]
+
+    @staticmethod
+    def _fetch_via_yfinance(symbol: str, start: date, end: date) -> pd.DataFrame:
+        try:
+            import yfinance as yf
+        except ImportError:
+            log.warning("yfinance not installed; cannot fall back")
+            return pd.DataFrame()
+
+        log.info("yfinance fallback: fetching history for %s (%s → %s)", symbol, start, end)
+        try:
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                auto_adjust=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.error("yfinance fallback failed for %s: %s", symbol, e)
+            return pd.DataFrame()
+
+        if df.empty:
+            return pd.DataFrame()
+
+        df = df.reset_index().rename(columns={
+            "Date": "date", "Open": "open", "High": "high",
+            "Low": "low", "Close": "close", "Volume": "volume",
+        })
+        df["symbol"] = symbol
+        df["date"] = pd.to_datetime(df["date"]).dt.tz_localize(None)
+        for col in ("open", "high", "low", "close", "volume"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        time.sleep(0.5)
         return df[["date", "symbol", "open", "high", "low", "close", "volume"]]
 
     def fetch_fundamentals(self, symbol: str) -> dict[str, Any]:
