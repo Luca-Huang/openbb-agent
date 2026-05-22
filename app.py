@@ -20,8 +20,20 @@ from research_workbench.research_store.files import (
     load_radar,
     load_summary,
 )
+from research_workbench.signal_engine.action_advisor import advise_actions, format_action_text
 from research_workbench.signal_engine.changes import detect_daily_changes
-from research_workbench.signal_engine.radar import DEFAULT_RADAR_CONFIG, build_current_signals
+from research_workbench.signal_engine.holdings_tracker import (
+    analyze_holding,
+    diff_against_previous,
+    load_holdings,
+    load_previous_snapshot,
+    save_snapshot,
+)
+from research_workbench.signal_engine.radar import (
+    DEFAULT_RADAR_CONFIG,
+    add_radar_features,
+    build_current_signals,
+)
 from research_workbench.validation.replay import (
     build_symbol_validation,
     build_validation_summary,
@@ -32,6 +44,8 @@ st.set_page_config(page_title="A-Share Research Workbench", layout="wide")
 
 SETTINGS = default_settings(ROOT)
 EQUITY_CONFIG_PATH = ROOT / "equity_config.json"
+HOLDINGS_PATH = ROOT / "research_inputs" / "holdings.json"
+HOLDINGS_SNAPSHOT_DIR = ROOT / "outputs" / "holdings_snapshots"
 
 WIRE_CSS = """
 <style>
@@ -83,9 +97,15 @@ def _load_context() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFr
     events = load_manual_events(SETTINGS)
     radar = load_radar(SETTINGS)
     symbols = watchlist_symbols(watchlist)
-    if symbols:
-        summary = summary[summary["symbol"].isin(symbols)].copy()
-        history = history[history["symbol"].isin(symbols)].copy()
+    # Always include holdings — the user must be able to see their positions
+    # even if they aren't (yet) on the watchlist.
+    holding_symbols = [
+        _resolve_a_share_symbol(p.code) for p in load_holdings(HOLDINGS_PATH)
+    ]
+    effective_symbols = list({*symbols, *holding_symbols})
+    if effective_symbols:
+        summary = summary[summary["symbol"].isin(effective_symbols)].copy()
+        history = history[history["symbol"].isin(effective_symbols)].copy()
     signals = build_current_signals(summary, history, watchlist, events, DEFAULT_RADAR_CONFIG)
     if signals.empty and not radar.empty:
         signals = radar.copy()
@@ -96,6 +116,111 @@ def _load_context() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFr
     return watchlist, summary, history, events, signals, replay, changes
 
 
+def _resolve_a_share_symbol(bare_code: str) -> str:
+    """Map a bare A-share code (e.g. '002602') to the suffixed symbol used in
+    the local history dataset (e.g. '002602.SZ').  Already-suffixed codes pass
+    through unchanged.
+    """
+    code = str(bare_code).strip().upper()
+    if "." in code:
+        return code
+    if code.startswith(("000", "001", "002", "003", "300", "301")):
+        return f"{code}.SZ"
+    if code.startswith(("600", "601", "603", "605", "688", "689")):
+        return f"{code}.SH"
+    return code
+
+
+_HOLDING_PRIORITY_EMOJI = {1: "🔴", 2: "🟠", 3: "🟢", 4: "⚪"}
+
+
+def _fmt_pct_signed(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{value * 100:+.2f}%"
+
+
+def _fmt_price_or_dash(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{value:.2f}"
+
+
+def render_holdings_section(history: pd.DataFrame) -> None:
+    """Daily 加仓/减仓/清仓 directives for every held position, with a one-line
+    diff against the previous snapshot so the user can see what changed —
+    the strongest anti-impulse signal is "nothing changed, still 持有不动".
+    """
+    st.subheader("💼 持仓动作")
+    positions = load_holdings(HOLDINGS_PATH)
+    if not positions:
+        st.info(
+            f"在 `{HOLDINGS_PATH.relative_to(ROOT)}` 维护你的持仓后会显示每日动作建议。"
+            " 格式参考 `research_inputs/holdings.example.json`。"
+        )
+        return
+
+    previous_snap = load_previous_snapshot(HOLDINGS_SNAPSHOT_DIR)
+
+    snapshots: list = []
+    missing: list[str] = []
+    for p in positions:
+        symbol = _resolve_a_share_symbol(p.code)
+        stock_hist = history[history["symbol"] == symbol].copy()
+        if stock_hist.empty:
+            missing.append(f"{p.name} ({p.code})")
+            continue
+        # local snapshot uses 'support_level'; holdings_tracker expects
+        # 'support_level_primary' to compute pct_to_support and stop_for_plan.
+        if (
+            "support_level" in stock_hist.columns
+            and "support_level_primary" not in stock_hist.columns
+        ):
+            stock_hist["support_level_primary"] = stock_hist["support_level"]
+        enriched = add_radar_features(stock_hist)
+        try:
+            snapshots.append(analyze_holding(enriched, p))
+        except Exception as exc:  # noqa: BLE001 — never block the UI
+            st.warning(f"{p.name} ({p.code}) 分析失败：{exc}")
+
+    if missing:
+        st.warning(
+            "以下持仓在本地历史数据中找不到，请把它们加进 watchlist 后运行 "
+            "`python3 scripts/refresh.py`：\n- " + "\n- ".join(missing)
+        )
+
+    if not snapshots:
+        return
+
+    rows = []
+    for snap in sorted(snapshots, key=lambda s: (s.priority, s.code)):
+        rows.append({
+            "优先级": _HOLDING_PRIORITY_EMOJI.get(snap.priority, "⚪"),
+            "股票": f"{snap.name} ({snap.code})",
+            "今日动作": snap.action,
+            "vs 昨日": diff_against_previous(snap, previous_snap),
+            "现价": _fmt_price_or_dash(snap.last_close),
+            "浮盈%": _fmt_pct_signed(snap.floating_pnl_pct),
+            "止损 / TP1 / TP2": (
+                f"{_fmt_price_or_dash(snap.stop_price)} / "
+                f"{_fmt_price_or_dash(snap.take_profit_1)} / "
+                f"{_fmt_price_or_dash(snap.take_profit_2)}"
+            ),
+            "理由": snap.note,
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    st.caption(
+        "动作基于成本价锚定的止损/TP 与生产 radar 触发规则。'vs 昨日' 显示与上一份快照的差异，"
+        "用于避免无变化时的冲动操作。"
+    )
+
+    # Persist today's analysis so tomorrow's UI can render the diff.
+    try:
+        save_snapshot(snapshots, HOLDINGS_SNAPSHOT_DIR)
+    except Exception:  # noqa: BLE001 — snapshot save is best-effort
+        pass
+
+
 def _render_card(column, title: str, value: str, note: str) -> None:
     column.markdown(
         f"<div class='rw-card'><div class='rw-title'>{title}</div><div class='rw-value'>{value}</div><div class='rw-note'>{note}</div></div>",
@@ -103,7 +228,7 @@ def _render_card(column, title: str, value: str, note: str) -> None:
     )
 
 
-def render_home(signals: pd.DataFrame, summary: pd.DataFrame, events: pd.DataFrame, replay: pd.DataFrame, changes: pd.DataFrame) -> None:
+def render_home(signals: pd.DataFrame, summary: pd.DataFrame, events: pd.DataFrame, replay: pd.DataFrame, changes: pd.DataFrame, history: pd.DataFrame) -> None:
     cols = st.columns(4)
     triggered = int((signals.get("signal_state", pd.Series(dtype=str)) == "triggered").sum()) if not signals.empty else 0
     near_zone = int((signals.get("signal_state", pd.Series(dtype=str)) == "near_zone").sum()) if not signals.empty else 0
@@ -114,6 +239,10 @@ def render_home(signals: pd.DataFrame, summary: pd.DataFrame, events: pd.DataFra
     _render_card(cols[1], "Triggered", str(triggered), "已触发可重点复查条件")
     _render_card(cols[2], "Near Zone", str(near_zone), "接近观察区间，等待确认")
     _render_card(cols[3], "Validation Samples", str(total_samples), "历史同类触发样本数")
+
+    # Holdings advisor sits at the top of the home page — it's the most personal
+    # surface and the strongest anti-impulse anchor ("nothing changed, hold").
+    render_holdings_section(history)
 
     st.subheader("今日重点变化")
     if changes.empty:
@@ -158,6 +287,28 @@ def render_home(signals: pd.DataFrame, summary: pd.DataFrame, events: pd.DataFra
             use_container_width=True,
             hide_index=True,
         )
+
+    st.subheader("后续动作建议")
+    if signals.empty:
+        st.info("暂无信号，无法生成动作建议。")
+    else:
+        actions = advise_actions(signals)
+        if actions.empty:
+            st.info("暂无可展示的动作建议。")
+        else:
+            _PRIORITY_LABELS = {1: "🔴 紧急", 2: "🟡 重要", 3: "🔵 一般", 4: "⚪ 低"}
+            actions_display = actions.copy()
+            actions_display["优先级"] = actions_display["action_priority"].map(_PRIORITY_LABELS).fillna("⚪ 低")
+            action_cols = ["优先级", "symbol", "name", "signal_state", "action", "action_detail"]
+            present = [c for c in action_cols if c in actions_display.columns]
+            st.dataframe(
+                actions_display[present].rename(columns={
+                    "symbol": "代码", "name": "名称", "signal_state": "状态",
+                    "action": "建议动作", "action_detail": "详情",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
 
     st.subheader("基本面过滤概览")
     if summary.empty:
@@ -208,6 +359,57 @@ def render_stock_detail(symbol: str, history: pd.DataFrame, signals: pd.DataFram
         _render_card(b, "Trigger", str(row.get("trigger_type", "N/A")), "触发类型")
         _render_card(c, "Conviction", f"{float(row.get('conviction_score', 0.0)):.1f}", "综合信心分")
         _render_card(d, "Event Risk", f"{float(row.get('event_risk_score', 0.0)):.1f}", "近期事件风险")
+
+    # ---- Action Advice ----
+    st.subheader("📋 动作建议")
+    if not stock_signal.empty:
+        actions = advise_actions(stock_signal)
+        if not actions.empty:
+            act = actions.iloc[0]
+            _PRIORITY_COLORS = {1: "#dc2626", 2: "#d97706", 3: "#2563eb", 4: "#6b7280"}
+            _PRIORITY_LABELS = {1: "紧急", 2: "重要", 3: "一般", 4: "低"}
+            pri = int(act.get("action_priority", 4))
+            pri_color = _PRIORITY_COLORS.get(pri, "#6b7280")
+            pri_label = _PRIORITY_LABELS.get(pri, "低")
+
+            st.markdown(
+                f"""
+                <div class='rw-card'>
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div style="font-size:1.1rem;font-weight:700;color:#0f172a;">{act['action']}</div>
+                        <span style="display:inline-block;padding:3px 10px;border-radius:6px;
+                               background:{pri_color};color:white;font-size:0.8rem;">{pri_label}</span>
+                    </div>
+                    <div style="color:#475569;font-size:0.9rem;margin-top:8px;white-space:pre-line;">{act['action_detail']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Entry plan (only for triggered stocks)
+            entry = act.get("suggested_entry")
+            if entry is not None and pd.notna(entry):
+                st.markdown("**入场计划参考**")
+                e1, e2, e3, e4 = st.columns(4)
+                _render_card(e1, "入场参考", f"{float(entry):.2f}", "当前收盘价")
+                stop = act.get("suggested_stop")
+                if stop is not None and pd.notna(stop):
+                    risk_pct = (float(entry) - float(stop)) / float(entry) * 100
+                    _render_card(e2, "止损位", f"{float(stop):.2f}", f"风险 {risk_pct:.1f}%")
+                tp1 = act.get("suggested_tp1")
+                if tp1 is not None and pd.notna(tp1):
+                    gain_pct = (float(tp1) - float(entry)) / float(entry) * 100
+                    _render_card(e3, "止盈1 (1R)", f"{float(tp1):.2f}", f"收益 {gain_pct:.1f}%")
+                tp2 = act.get("suggested_tp2")
+                if tp2 is not None and pd.notna(tp2):
+                    gain_pct2 = (float(tp2) - float(entry)) / float(entry) * 100
+                    _render_card(e4, "止盈2 (2R)", f"{float(tp2):.2f}", f"收益 {gain_pct2:.1f}%")
+
+                sizing = act.get("position_sizing_note", "")
+                if sizing:
+                    st.caption(sizing)
+    else:
+        st.info("暂无信号，无法生成动作建议。")
 
     st.subheader("价格证据")
     if stock_history.empty:
@@ -325,7 +527,7 @@ def main() -> None:
 
     tabs = st.tabs(["首页", "单票", "验证", "设置"])
     with tabs[0]:
-        render_home(signals, summary, events, replay, changes)
+        render_home(signals, summary, events, replay, changes, history)
     with tabs[1]:
         options = watchlist_symbols(watchlist) or (sorted(signals["symbol"].unique().tolist()) if not signals.empty else [])
         if not options:

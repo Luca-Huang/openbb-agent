@@ -18,6 +18,16 @@
     "target_zone_low": null,
     "target_zone_high": null,
     "notes": "用户重点跟踪"
+  },
+  {
+    "symbol": "002602.SZ",
+    "name": "世纪华通",
+    "market": "CN",
+    "sector": "传媒游戏",
+    "status": "watch",
+    "target_zone_low": null,
+    "target_zone_high": null,
+    "notes": "用户持仓"
   }
 ]
 

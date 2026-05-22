@@ -21,6 +21,7 @@ RADAR_PATH = ROOT / "openbb_outputs" / "equity_opportunity_radar.csv"
 SUMMARY_PATH = ROOT / "openbb_outputs" / "three_month_summary.csv"
 SEND_LOG_PATH = ROOT / "openbb_outputs" / "radar_email_sent_log.json"
 HOLDINGS_PATH = ROOT / "research_inputs" / "holdings.json"
+HOLDINGS_SNAPSHOT_DIR = ROOT / "outputs" / "holdings_snapshots"
 
 sys.path.insert(0, str(ROOT / "src"))
 log = logging.getLogger("send_radar_email")
@@ -162,6 +163,7 @@ def build_holdings_section_html() -> str:
     try:
         from research_workbench.signal_engine.holdings_tracker import (
             analyze_holding, load_holdings, render_holding_cards_html,
+            save_snapshot,
         )
         positions = load_holdings(HOLDINGS_PATH)
         if not positions:
@@ -173,6 +175,13 @@ def build_holdings_section_html() -> str:
                 snapshots.append(analyze_holding(history, p))
             except Exception as exc:  # noqa: BLE001 — keep email resilient
                 log.warning("holdings analysis failed for %s: %s", p.code, exc)
+        # Persist today's analysis so the next UI / email run can render a
+        # 'vs 昨日' diff.  Best-effort: a save failure must not block the email.
+        try:
+            if snapshots:
+                save_snapshot(snapshots, HOLDINGS_SNAPSHOT_DIR)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("holdings snapshot save failed: %s", exc)
         return render_holding_cards_html(snapshots)
     except Exception as exc:  # noqa: BLE001
         log.warning("holdings section build failed: %s", exc)
