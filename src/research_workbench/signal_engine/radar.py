@@ -211,16 +211,19 @@ def _fmt_price(value: float | None) -> str:
 def compute_exit_plan(
     entry_price: float | None,
     stop_price: float | None,
-    atr14: float | None,
-    ma20: float | None,
-    highest_close_20d: float | None,
-    cfg: dict[str, Any],
+    atr14: float | None = None,
+    ma20: float | None = None,
+    highest_close_20d: float | None = None,
+    cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a reference take-profit plan from R multiples plus a trailing stop.
 
     The signal engine does not know the user's actual fill price or position age,
-    so this uses the latest trigger price as the reference entry.
+    so this uses the latest trigger price as the reference entry. ``atr14`` /
+    ``ma20`` / ``highest_close_20d`` are optional; without them the trailing stop
+    is left undefined (callers that only need TP levels can omit them).
     """
+    cfg = cfg or {}
     tp1_r = float(cfg.get("take_profit_1_r", 1.0))
     tp2_r = float(cfg.get("take_profit_2_r", 2.0))
     tp1_alloc = str(cfg.get("take_profit_1_allocation", "30%-50%"))
