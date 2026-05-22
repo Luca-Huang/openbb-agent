@@ -137,8 +137,14 @@ def render_home(signals: pd.DataFrame, summary: pd.DataFrame, events: pd.DataFra
             "signal_state",
             "trigger_type",
             "trigger_price",
+            "stop_price",
+            "risk_unit",
+            "take_profit_1",
+            "take_profit_2",
+            "trailing_stop",
             "target_zone_low",
             "target_zone_high",
+            "exit_plan",
             "valuation_score",
             "quality_score",
             "event_risk_score",
@@ -146,6 +152,7 @@ def render_home(signals: pd.DataFrame, summary: pd.DataFrame, events: pd.DataFra
             "reasons",
         ]
         present_cols = [col for col in display_cols if col in signals.columns]
+        st.caption("止盈说明：TP1 按 1R 分批卖出 30%-50%，TP2 按 2R 再卖 20%-30%，剩余仓位用 MA20 与 ATR 移动止盈跟踪。")
         st.dataframe(
             signals[present_cols].sort_values("conviction_score", ascending=False),
             use_container_width=True,
@@ -220,8 +227,10 @@ def render_stock_detail(symbol: str, history: pd.DataFrame, signals: pd.DataFram
             "close",
             "support_level",
             "support_level_secondary",
+            "ma20",
             "ma50",
             "ma200",
+            "highest_close_20d",
             "volume_spike_ratio",
             "atr14",
             "drawdown_60d",
@@ -234,11 +243,19 @@ def render_stock_detail(symbol: str, history: pd.DataFrame, signals: pd.DataFram
     if stock_signal.empty:
         st.info("暂无可展示证据。")
     else:
+        st.caption("止盈/止损不是自动下单：价格位用于复盘和执行计划，实际仓位应按单笔最大亏损控制。")
         st.json(
             {
                 "reasons": stock_signal.iloc[0].get("reasons", ""),
                 "invalidation_conditions": stock_signal.iloc[0].get("invalidation_conditions", ""),
                 "entry_recommendation": stock_signal.iloc[0].get("entry_recommendation", ""),
+                "stop_price": stock_signal.iloc[0].get("stop_price"),
+                "risk_unit": stock_signal.iloc[0].get("risk_unit"),
+                "take_profit_1": stock_signal.iloc[0].get("take_profit_1"),
+                "take_profit_2": stock_signal.iloc[0].get("take_profit_2"),
+                "trailing_stop": stock_signal.iloc[0].get("trailing_stop"),
+                "exit_plan": stock_signal.iloc[0].get("exit_plan", ""),
+                "exit_plan_notes": stock_signal.iloc[0].get("exit_plan_notes", ""),
                 "target_zone_low": stock_signal.iloc[0].get("target_zone_low"),
                 "target_zone_high": stock_signal.iloc[0].get("target_zone_high"),
             }
@@ -324,4 +341,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

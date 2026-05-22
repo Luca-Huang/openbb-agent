@@ -22,28 +22,62 @@ DEFAULT_RADAR_CONFIG: dict[str, Any] = {
     "risk": {
         "max_drawdown_60d_penalty_start": 0.22,
     },
+    "exits": {
+        "take_profit_1_r": 1.0,
+        "take_profit_2_r": 2.0,
+        "take_profit_1_allocation": "30%-50%",
+        "take_profit_2_allocation": "20%-30%",
+        "trailing_atr_multiple": 2.0,
+    },
 }
 
 
 def add_radar_features(df: pd.DataFrame, cfg: dict[str, Any] | None = None) -> pd.DataFrame:
     cfg = cfg or DEFAULT_RADAR_CONFIG
-    enriched = df.sort_values("date").copy()
+    sort_cols = ["symbol", "date"] if "symbol" in df.columns else ["date"]
+    enriched = df.sort_values(sort_cols).copy()
     lookback_high = int(cfg.get("triggers", {}).get("breakout", {}).get("lookback_high_days", 20))
     close = pd.to_numeric(enriched.get("close"), errors="coerce")
     high = pd.to_numeric(enriched.get("high", close), errors="coerce")
     low = pd.to_numeric(enriched.get("low", close), errors="coerce")
     volume = pd.to_numeric(enriched.get("volume"), errors="coerce")
 
-    enriched["high_20d"] = high.rolling(window=lookback_high, min_periods=1).max().shift(1)
-    prev_close = close.shift(1)
+    if "symbol" in enriched.columns:
+        enriched["_close"] = close
+        enriched["_high"] = high
+        enriched["_volume"] = volume
+        grouped = enriched.groupby("symbol", group_keys=False)
+        enriched["high_20d"] = grouped["_high"].transform(
+            lambda s: s.rolling(window=lookback_high, min_periods=1).max().shift(1)
+        )
+        enriched["ma20"] = grouped["_close"].transform(lambda s: s.rolling(window=20, min_periods=1).mean())
+        enriched["highest_close_20d"] = grouped["_close"].transform(lambda s: s.rolling(window=20, min_periods=1).max())
+        prev_close = grouped["_close"].shift(1)
+    else:
+        enriched["high_20d"] = high.rolling(window=lookback_high, min_periods=1).max().shift(1)
+        enriched["ma20"] = close.rolling(window=20, min_periods=1).mean()
+        enriched["highest_close_20d"] = close.rolling(window=20, min_periods=1).max()
+        prev_close = close.shift(1)
+
     true_range = pd.concat(
         [(high - low).abs(), (high - prev_close).abs(), (low - prev_close).abs()],
         axis=1,
     ).max(axis=1)
-    enriched["atr14"] = true_range.rolling(window=14, min_periods=1).mean()
-    rolling_peak = close.rolling(window=60, min_periods=1).max()
+    if "symbol" in enriched.columns:
+        enriched["_tr"] = true_range
+        enriched["_dollar_volume"] = close * volume
+        grouped = enriched.groupby("symbol", group_keys=False)
+        enriched["atr14"] = grouped["_tr"].transform(lambda s: s.rolling(window=14, min_periods=1).mean())
+        rolling_peak = grouped["_close"].transform(lambda s: s.rolling(window=60, min_periods=1).max())
+        enriched["dollar_volume20"] = grouped["_dollar_volume"].transform(
+            lambda s: s.rolling(window=20, min_periods=1).mean()
+        )
+        enriched = enriched.drop(columns=["_close", "_high", "_volume", "_tr", "_dollar_volume"])
+    else:
+        enriched["atr14"] = true_range.rolling(window=14, min_periods=1).mean()
+        rolling_peak = close.rolling(window=60, min_periods=1).max()
+        enriched["dollar_volume20"] = (close * volume).rolling(window=20, min_periods=1).mean()
     enriched["drawdown_60d"] = (rolling_peak - close) / rolling_peak.replace(0, np.nan)
-    enriched["dollar_volume20"] = (close * volume).rolling(window=20, min_periods=1).mean()
     return enriched
 
 
@@ -168,6 +202,86 @@ def _signal_state(trigger_type: str | None, zone_distance: float | None, close: 
     return "watch"
 
 
+def _fmt_price(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "N/A"
+    return f"{float(value):.2f}"
+
+
+def compute_exit_plan(
+    entry_price: float | None,
+    stop_price: float | None,
+    atr14: float | None,
+    ma20: float | None,
+    highest_close_20d: float | None,
+    cfg: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a reference take-profit plan from R multiples plus a trailing stop.
+
+    The signal engine does not know the user's actual fill price or position age,
+    so this uses the latest trigger price as the reference entry.
+    """
+    tp1_r = float(cfg.get("take_profit_1_r", 1.0))
+    tp2_r = float(cfg.get("take_profit_2_r", 2.0))
+    tp1_alloc = str(cfg.get("take_profit_1_allocation", "30%-50%"))
+    tp2_alloc = str(cfg.get("take_profit_2_allocation", "20%-30%"))
+    atr_multiple = float(cfg.get("trailing_atr_multiple", 2.0))
+
+    if (
+        entry_price is None
+        or stop_price is None
+        or pd.isna(entry_price)
+        or pd.isna(stop_price)
+        or float(entry_price) <= float(stop_price)
+    ):
+        return {
+            "risk_unit": np.nan,
+            "take_profit_1": np.nan,
+            "take_profit_2": np.nan,
+            "trailing_stop": np.nan,
+            "exit_plan": "No take-profit plan: entry must be above stop_price.",
+            "exit_plan_notes": "Use position sizing first; skip the setup if the stop is not below entry.",
+        }
+
+    entry = float(entry_price)
+    stop = float(stop_price)
+    risk_unit = entry - stop
+    take_profit_1 = entry + tp1_r * risk_unit
+    take_profit_2 = entry + tp2_r * risk_unit
+
+    trailing_candidates: list[float] = []
+    if ma20 is not None and pd.notna(ma20) and float(ma20) <= entry:
+        trailing_candidates.append(float(ma20))
+    if (
+        highest_close_20d is not None
+        and pd.notna(highest_close_20d)
+        and atr14 is not None
+        and pd.notna(atr14)
+    ):
+        atr_trail = float(highest_close_20d) - atr_multiple * float(atr14)
+        if atr_trail <= entry:
+            trailing_candidates.append(atr_trail)
+    trailing_stop = max(trailing_candidates) if trailing_candidates else np.nan
+
+    exit_plan = (
+        f"TP1 {_fmt_price(take_profit_1)} ({tp1_r:.1f}R, sell {tp1_alloc}); "
+        f"TP2 {_fmt_price(take_profit_2)} ({tp2_r:.1f}R, sell {tp2_alloc}); "
+        f"trail rest at {_fmt_price(trailing_stop)}."
+    )
+    exit_plan_notes = (
+        f"R = entry - stop = {_fmt_price(risk_unit)}. "
+        f"Trailing stop uses max(MA20, 20d highest close - {atr_multiple:.1f} * ATR14) when below entry."
+    )
+    return {
+        "risk_unit": risk_unit,
+        "take_profit_1": take_profit_1,
+        "take_profit_2": take_profit_2,
+        "trailing_stop": trailing_stop,
+        "exit_plan": exit_plan,
+        "exit_plan_notes": exit_plan_notes,
+    }
+
+
 def build_current_signals(
     summary_df: pd.DataFrame,
     history_df: pd.DataFrame,
@@ -200,6 +314,7 @@ def build_current_signals(
     rows: list[dict[str, Any]] = []
     trigger_cfg = cfg.get("triggers", {})
     risk_cfg = cfg.get("risk", {})
+    exit_cfg = cfg.get("exits", {})
 
     for _, row in merged.iterrows():
         close = pd.to_numeric(row.get("close"), errors="coerce")
@@ -212,6 +327,8 @@ def build_current_signals(
         event_risk_score, event_summary = _event_risk_score(events_df, row["symbol"], pd.to_datetime(row["date"]))
         drawdown_60d = pd.to_numeric(row.get("drawdown_60d"), errors="coerce")
         atr14 = pd.to_numeric(row.get("atr14"), errors="coerce")
+        ma20 = pd.to_numeric(row.get("ma20"), errors="coerce")
+        highest_close_20d = pd.to_numeric(row.get("highest_close_20d"), errors="coerce")
         volume_spike = pd.to_numeric(row.get("volume_spike_ratio"), errors="coerce")
         value_score = pd.to_numeric(row.get("value_score"), errors="coerce")
         trigger_bonus = 8.0 if trigger_type == "breakout" else (6.0 if trigger_type == "pullback" else 0.0)
@@ -241,6 +358,7 @@ def build_current_signals(
             invalidation.append(f"close < {float(stop_price):.2f}")
         if pd.notna(ma200):
             invalidation.append(f"below_ma200={float(ma200):.2f}")
+        exit_plan = compute_exit_plan(close, stop_price, atr14, ma20, highest_close_20d, exit_cfg)
         rows.append(
             {
                 "symbol": row["symbol"],
@@ -258,6 +376,10 @@ def build_current_signals(
                 "conviction_score": round(conviction_score, 2),
                 "trigger_price": close,
                 "stop_price": stop_price,
+                "risk_unit": exit_plan["risk_unit"],
+                "take_profit_1": exit_plan["take_profit_1"],
+                "take_profit_2": exit_plan["take_profit_2"],
+                "trailing_stop": exit_plan["trailing_stop"],
                 "target_zone_low": row.get("target_zone_low"),
                 "target_zone_high": row.get("target_zone_high"),
                 "zone_distance": zone_distance,
@@ -265,6 +387,8 @@ def build_current_signals(
                 "entry_recommendation": row.get("entry_recommendation"),
                 "reasons": "; ".join(reasons),
                 "invalidation_conditions": "; ".join(invalidation),
+                "exit_plan": exit_plan["exit_plan"],
+                "exit_plan_notes": exit_plan["exit_plan_notes"],
                 "event_summary": event_summary,
             }
         )
@@ -273,4 +397,3 @@ def build_current_signals(
     if out.empty:
         return out
     return out.sort_values(["signal_state", "conviction_score"], ascending=[True, False])
-

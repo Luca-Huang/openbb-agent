@@ -56,6 +56,8 @@ def load_history(settings: AppSettings) -> pd.DataFrame:
         "ps_ratio",
         "ma50",
         "ma200",
+        "ma20",
+        "highest_close_20d",
         "rsi14",
         "fib_38_2",
         "fib_50",
@@ -67,6 +69,10 @@ def load_history(settings: AppSettings) -> pd.DataFrame:
         "vpt",
         "vwap",
         "ad_line",
+        "risk_unit",
+        "take_profit_1",
+        "take_profit_2",
+        "trailing_stop",
     ]
     for col in numeric_candidates:
         if col in df.columns:
@@ -80,6 +86,9 @@ def load_radar(settings: AppSettings) -> pd.DataFrame:
     df = pd.read_csv(settings.radar_path)
     if "as_of_date" in df.columns:
         df["as_of_date"] = pd.to_datetime(df["as_of_date"], errors="coerce")
+    for col in ["trigger_price", "stop_price", "risk_unit", "take_profit_1", "take_profit_2", "trailing_stop"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
     return df
 
 
@@ -94,4 +103,3 @@ def load_manual_events(settings: AppSettings) -> pd.DataFrame:
     if "symbol" in df.columns:
         df["symbol"] = df["symbol"].astype(str).str.upper()
     return df
-

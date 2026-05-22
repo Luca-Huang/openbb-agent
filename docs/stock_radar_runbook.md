@@ -44,6 +44,10 @@ python fetch_equities_fmp.py
   - `breakout`: 放量突破（突破近 20 日高点且量能放大）
 - `trigger_price`: 触发价
 - `stop_price`: 止损价
+- `take_profit_1`: 第一止盈位，按 1R 计算，建议先卖出 30%-50%
+- `take_profit_2`: 第二止盈位，按 2R 计算，建议再卖出 20%-30%
+- `trailing_stop`: 剩余仓位移动止盈位，使用 MA20 与 `20 日最高收盘 - 2 * ATR14` 的较高者
+- `exit_plan`: 止盈执行说明
 - `opportunity_score`: 机会分（价值分 + 触发加分 - 风险扣分）
 - `risk_flags`: 风险标记（如 `drawdown60d_high`、`atr_high`）
 
@@ -53,6 +57,7 @@ python fetch_equities_fmp.py
 2. 同分时优先 `breakout` 中量能更强者。
 3. 若出现 `risk_flags`，降低仓位或延迟执行。
 4. 结合持仓面板中的止损位执行风险控制。
+5. 到达 `take_profit_1` 先收回部分风险，到达 `take_profit_2` 再分批兑现，剩余仓位用 `trailing_stop` 跟踪趋势。
 
 ## 6. 常见故障排查
 

@@ -6,7 +6,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from research_workbench.signal_engine.radar import add_radar_features, build_current_signals
+from research_workbench.signal_engine.radar import add_radar_features, build_current_signals, compute_exit_plan
 
 
 class TestResearchWorkbenchSignalEngine(unittest.TestCase):
@@ -61,10 +61,39 @@ class TestResearchWorkbenchSignalEngine(unittest.TestCase):
         )
         out = build_current_signals(summary, history, watchlist, pd.DataFrame())
         self.assertFalse(out.empty)
-        for col in ["signal_state", "trigger_type", "conviction_score", "reasons"]:
+        for col in [
+            "signal_state",
+            "trigger_type",
+            "conviction_score",
+            "reasons",
+            "risk_unit",
+            "take_profit_1",
+            "take_profit_2",
+            "trailing_stop",
+            "exit_plan",
+            "exit_plan_notes",
+        ]:
             self.assertIn(col, out.columns)
+        self.assertAlmostEqual(float(out.iloc[0]["risk_unit"]), 0.8)
+        self.assertAlmostEqual(float(out.iloc[0]["take_profit_1"]), 10.8)
+        self.assertAlmostEqual(float(out.iloc[0]["take_profit_2"]), 11.6)
+        self.assertIn("TP1", out.iloc[0]["exit_plan"])
+
+    def test_compute_exit_plan_uses_r_multiples_and_trailing_stop(self):
+        plan = compute_exit_plan(
+            entry_price=100.0,
+            stop_price=95.0,
+            atr14=2.0,
+            ma20=98.0,
+            highest_close_20d=104.0,
+            cfg={"take_profit_1_r": 1.0, "take_profit_2_r": 2.0, "trailing_atr_multiple": 2.0},
+        )
+        self.assertAlmostEqual(plan["risk_unit"], 5.0)
+        self.assertAlmostEqual(plan["take_profit_1"], 105.0)
+        self.assertAlmostEqual(plan["take_profit_2"], 110.0)
+        self.assertAlmostEqual(plan["trailing_stop"], 100.0)
+        self.assertIn("R = entry - stop", plan["exit_plan_notes"])
 
 
 if __name__ == "__main__":
     unittest.main()
-

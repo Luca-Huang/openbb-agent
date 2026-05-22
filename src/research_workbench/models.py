@@ -38,8 +38,14 @@ class SignalSnapshot:
     quality_score: float
     event_risk_score: float
     conviction_score: float
+    risk_unit: Optional[float] = None
+    take_profit_1: Optional[float] = None
+    take_profit_2: Optional[float] = None
+    trailing_stop: Optional[float] = None
     reasons: str = ""
     invalidation_conditions: str = ""
+    exit_plan: str = ""
+    exit_plan_notes: str = ""
 
 
 @dataclass(frozen=True)
