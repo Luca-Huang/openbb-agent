@@ -17,9 +17,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
-RADAR_PATH = ROOT / "openbb_outputs" / "equity_opportunity_radar.csv"
-SUMMARY_PATH = ROOT / "openbb_outputs" / "three_month_summary.csv"
-SEND_LOG_PATH = ROOT / "openbb_outputs" / "radar_email_sent_log.json"
+DATA_DIR = ROOT / "outputs" / "research_data"
+RADAR_PATH = DATA_DIR / "equity_opportunity_radar.csv"
+SUMMARY_PATH = DATA_DIR / "three_month_summary.csv"
+SEND_LOG_PATH = DATA_DIR / "radar_email_sent_log.json"
 HOLDINGS_PATH = ROOT / "research_inputs" / "holdings.json"
 HOLDINGS_SNAPSHOT_DIR = ROOT / "outputs" / "holdings_snapshots"
 
@@ -103,55 +104,24 @@ def load_radar_dataframe() -> pd.DataFrame:
 
 
 def _fetch_history_for_holding(code: str, lookback_days: int = 400) -> pd.DataFrame:
-    """Pull daily OHLCV via akshare and bolt on the indicator schema the
-    backtest module needs.  Imports inside the function so the email path
-    keeps working when akshare/network is unavailable for the watchlist
-    section.
-    """
-    for k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY",
-             "all_proxy", "ALL_PROXY"):
-        os.environ.pop(k, None)
-    os.environ["NO_PROXY"] = "*"
-    import urllib.request as _u
-    _u.getproxies = lambda: {}
-
-    import akshare as ak
-    import numpy as np
+    """Pull daily OHLCV through the shared Longbridge provider."""
+    from research_workbench.data_sources.indicators import add_technical_indicators
+    from research_workbench.data_sources.longbridge import get_provider
     from research_workbench.signal_engine.radar import add_radar_features
 
+    symbol = code.upper()
+    if "." not in symbol:
+        symbol = f"{symbol}.SZ"
+    market = {"SZ": "CN", "SH": "CN", "HK": "HK", "US": "US"}.get(symbol.rsplit(".", 1)[-1], "CN")
     end = datetime.now().date()
-    start = (end - pd.Timedelta(days=lookback_days)).strftime("%Y%m%d")
-    raw = ak.stock_zh_a_hist(symbol=code, period="daily",
-                             start_date=start, end_date=end.strftime("%Y%m%d"),
-                             adjust="qfq")
-    raw.columns = ["date", "code", "open", "close", "high", "low",
-                   "volume", "amount", "amplitude", "pct_chg", "chg", "turnover"]
-    raw["date"] = pd.to_datetime(raw["date"])
-    for c in ("open", "close", "high", "low", "volume"):
-        raw[c] = pd.to_numeric(raw[c], errors="coerce")
-    raw["symbol"] = code
-    d = raw.sort_values("date").copy()
-
-    # Mirror fetch_cn_data.py upstream indicator schema
-    close = d["close"]
-    d["ma50"] = close.rolling(50, min_periods=1).mean()
-    d["ma200"] = close.rolling(200, min_periods=1).mean()
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14, min_periods=14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14, min_periods=14).mean()
-    rs = gain / loss.replace(0, np.nan)
-    d["rsi14"] = 100 - 100 / (1 + rs)
-    rolling_min = close.rolling(20, min_periods=1).min()
-    d["support_level_primary"] = rolling_min
-    d["support_level_secondary"] = rolling_min * 1.1
-    d["volume_ma20"] = d["volume"].rolling(20, min_periods=1).mean()
-    d["volume_spike_ratio"] = d["volume"] / d["volume_ma20"]
-    return add_radar_features(d)
+    start = end - pd.Timedelta(days=lookback_days)
+    raw = get_provider(market).fetch_history(symbol, start, end)
+    return add_radar_features(add_technical_indicators(raw))
 
 
 def build_holdings_section_html() -> str:
     """Best-effort holdings section. Returns empty string on any failure so a
-    transient akshare hiccup never blocks the main radar email.
+    transient market-data hiccup never blocks the main radar email.
 
     Set ``RADAR_SKIP_HOLDINGS=1`` to disable (used by tests / CI to avoid
     pulling network data).

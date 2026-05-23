@@ -17,7 +17,7 @@ Three things live here:
   from :func:`radar.compute_exit_plan` (TP1/TP2/trailing stop / MA50 break).
 
 The history dataframe is expected to follow the same column convention as
-`fetch_cn_data.py` + `radar.add_radar_features`: ``date, close, high, low,
+`data_sources.indicators.add_technical_indicators` + `radar.add_radar_features`: ``date, close, high, low,
 volume, ma20, ma50, ma200, rsi14, atr14, support_level_primary,
 volume_spike_ratio, high_20d, highest_close_20d``.
 """

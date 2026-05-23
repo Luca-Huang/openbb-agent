@@ -34,7 +34,7 @@ class AppSettings:
 
 
 def default_settings(repo_root: Path) -> AppSettings:
-    data_dir = repo_root / "openbb_outputs"
+    data_dir = repo_root / "outputs" / "research_data"
     input_dir = repo_root / "research_inputs"
     return AppSettings(
         repo_root=repo_root,

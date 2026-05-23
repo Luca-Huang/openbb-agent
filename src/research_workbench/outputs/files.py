@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
-
-import numpy as np
 import pandas as pd
 
 from research_workbench.config import AppSettings
-
 
 
 def load_summary(settings: AppSettings) -> pd.DataFrame:
@@ -103,3 +98,18 @@ def load_manual_events(settings: AppSettings) -> pd.DataFrame:
     if "symbol" in df.columns:
         df["symbol"] = df["symbol"].astype(str).str.upper()
     return df
+
+
+def save_history(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.history_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.history_path, index=False)
+
+
+def save_summary(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.summary_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.summary_path, index=False)
+
+
+def save_signals_snapshot(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.signals_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.signals_snapshot_path, index=False)

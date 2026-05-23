@@ -1,6 +1,6 @@
 """Run holding-level backtest using the production radar trigger rules.
 
-Pulls A-share daily history via akshare, builds the indicator schema expected
+Pulls daily history via Longbridge CLI, builds the indicator schema expected
 by `signal_engine.backtest`, then prints a per-symbol report covering:
 
   - both P&L views (broker 摊薄 vs moving-average) — must agree on total
@@ -9,29 +9,22 @@ by `signal_engine.backtest`, then prints a per-symbol report covering:
   - today's verdict for the latest bar
 
 This is the on-demand entry point. It writes the same CSV layout the prior
-session produced under ``openbb_outputs/`` so existing notebooks/diffs still
+session produced under ``outputs/research_data/`` so existing notebooks/diffs still
 work.
 """
 from __future__ import annotations
 
-import os
-for _k in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
-    os.environ.pop(_k, None)
-os.environ["NO_PROXY"] = "*"
-
-import urllib.request
-urllib.request.getproxies = lambda: {}
-
 from pathlib import Path
 import sys
+from datetime import datetime
 
-import akshare as ak
-import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from research_workbench.data_sources.indicators import add_technical_indicators
+from research_workbench.data_sources.longbridge import get_provider
 from research_workbench.signal_engine.backtest import (
     compute_position_pnl,
     decision_review,
@@ -43,61 +36,31 @@ from research_workbench.signal_engine.radar import (
     detect_trigger_type,
 )
 
-OUT = ROOT / "openbb_outputs"
+OUT = ROOT / "outputs" / "research_data"
 
 
 # ---------- data ----------
 
-def fetch_daily(code: str, start: str, end: str) -> pd.DataFrame:
-    raw = ak.stock_zh_a_hist(symbol=code, period="daily",
-                             start_date=start, end_date=end, adjust="qfq")
-    raw.columns = ["date", "code", "open", "close", "high", "low",
-                   "volume", "amount", "amplitude", "pct_chg", "chg", "turnover"]
-    raw["date"] = pd.to_datetime(raw["date"])
-    for c in ("open", "close", "high", "low", "volume", "amount",
-              "amplitude", "pct_chg", "chg", "turnover"):
-        raw[c] = pd.to_numeric(raw[c], errors="coerce")
-    raw["symbol"] = code
-    return raw.sort_values("date").reset_index(drop=True)
+def _parse_yyyymmdd(value: str):
+    return datetime.strptime(value, "%Y%m%d").date()
+
+
+def fetch_daily(symbol: str, start: str, end: str) -> pd.DataFrame:
+    provider = get_provider("CN")
+    raw = provider.fetch_history(symbol, _parse_yyyymmdd(start), _parse_yyyymmdd(end))
+    return add_radar_features(add_technical_indicators(raw))
 
 
 def compute_full_indicators(df: pd.DataFrame) -> pd.DataFrame:
-    """Add the full indicator schema needed by signal_engine.backtest.
-
-    Combines what `fetch_cn_data.py` would produce (ma50/ma200/rsi14/support/
-    volume_spike_ratio) with what `radar.add_radar_features` adds
-    (ma20/atr14/high_20d/highest_close_20d/drawdown_60d).
-    """
-    d = df.sort_values("date").copy()
-    close = d["close"]
-
-    # ma50 / ma200 / rsi14 (mirrors fetch_cn_data.py)
-    d["ma50"] = close.rolling(50, min_periods=1).mean()
-    d["ma200"] = close.rolling(200, min_periods=1).mean()
-    delta = close.diff()
-    gain = delta.clip(lower=0).rolling(14, min_periods=14).mean()
-    loss = (-delta.clip(upper=0)).rolling(14, min_periods=14).mean()
-    rs = gain / loss.replace(0, np.nan)
-    d["rsi14"] = 100 - 100 / (1 + rs)
-
-    # Support / volume — same definitions fetch_cn_data.py uses
-    rolling_min = close.rolling(20, min_periods=1).min()
-    d["support_level_primary"] = rolling_min
-    d["support_level_secondary"] = rolling_min * 1.1
-    d["volume_ma20"] = d["volume"].rolling(20, min_periods=1).mean()
-    d["volume_spike_ratio"] = d["volume"] / d["volume_ma20"]
-
-    # Now overlay radar's features (ma20 / atr14 / high_20d / drawdown_60d)
-    d = add_radar_features(d)
-    return d
+    """Compatibility wrapper around the shared indicator pipeline."""
+    return add_radar_features(add_technical_indicators(df))
 
 
 # ---------- presentation ----------
 
 def report(label: str, code: str, trades: list[dict], start: str, end: str):
     print(f"\n=== {label} ({code}) ===")
-    raw = fetch_daily(code, start, end)
-    d = compute_full_indicators(raw)
+    d = fetch_daily(code, start, end)
     last = d.iloc[-1]
 
     # P&L
@@ -180,6 +143,6 @@ GOERTEK_TRADES = [
 
 if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
-    report("Huatong",        "002602", HUATONG_TRADES, "20240101", "20260505")
-    report("PerfectWorld_v2", "002624", PW_TRADES,     "20240101", "20260505")
-    report("GoerTek_v2",     "002241", GOERTEK_TRADES, "20240101", "20260505")
+    report("Huatong",        "002602.SZ", HUATONG_TRADES, "20240101", "20260505")
+    report("PerfectWorld_v2", "002624.SZ", PW_TRADES,     "20240101", "20260505")
+    report("GoerTek_v2",     "002241.SZ", GOERTEK_TRADES, "20240101", "20260505")

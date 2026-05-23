@@ -7,31 +7,22 @@ Then compute forward returns at +5 / +10 / +20 / +60 trading days.
 """
 from __future__ import annotations
 
-import os
-for _k in ("http_proxy","https_proxy","HTTP_PROXY","HTTPS_PROXY","all_proxy","ALL_PROXY"):
-    os.environ.pop(_k, None)
-os.environ["NO_PROXY"] = "*"
-import urllib.request
-urllib.request.getproxies = lambda: {}
-
 from pathlib import Path
-import numpy as np
 import pandas as pd
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from backtest_local_strategy import fetch_daily, compute_indicators
+from backtest_local_strategy import fetch_daily
 
 CASES = [
-    ("002624", "PerfectWorld"),
-    ("002602", "Huatong"),
-    ("002241", "GoerTek"),
-    ("002343", "CiwenMedia"),
+    ("002624.SZ", "PerfectWorld"),
+    ("002602.SZ", "Huatong"),
+    ("002241.SZ", "GoerTek"),
+    ("002343.SZ", "CiwenMedia"),
 ]
 
 def measure(code: str) -> pd.DataFrame:
-    raw = fetch_daily(code, "20220101", "20260505")
-    d = compute_indicators(raw)
+    d = fetch_daily(code, "20220101", "20260505")
     rows = []
     for i in range(len(d)):
         r = d.iloc[i]

@@ -14,7 +14,7 @@ import streamlit as st
 
 from research_workbench.config import default_settings
 from research_workbench.ingestion.watchlist import load_watchlist, watchlist_symbols
-from research_workbench.research_store.files import (
+from research_workbench.outputs.files import (
     load_history,
     load_manual_events,
     load_radar,
@@ -40,7 +40,7 @@ from research_workbench.validation.replay import (
     replay_trigger_history,
 )
 
-st.set_page_config(page_title="A-Share Research Workbench", layout="wide")
+st.set_page_config(page_title="Research Workbench", layout="wide")
 
 SETTINGS = default_settings(ROOT)
 EQUITY_CONFIG_PATH = ROOT / "equity_config.json"
@@ -520,7 +520,7 @@ def render_settings(watchlist: pd.DataFrame) -> None:
 
 
 def main() -> None:
-    st.title("A 股个人研究工作台")
+    st.title("个人研究工作台")
     st.caption("第一版目标：证据透明 + 历史验证。UI 仅为可替换骨架。")
 
     watchlist, summary, history, events, signals, replay, changes = _load_context()

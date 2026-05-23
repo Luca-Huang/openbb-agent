@@ -7,7 +7,7 @@ on:
 
 jobs:
   opening-radar-email:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - name: Checkout
@@ -18,19 +18,17 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install dependencies and verify Longbridge CLI
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install yfinance akshare
+          longbridge check --format json
 
       - name: Refresh research workbench data
-        continue-on-error: true
         run: |
           PYTHONPATH="$PWD:$PWD/src" python3 scripts/refresh.py
 
       - name: Send opening radar email
-        continue-on-error: true
         env:
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}

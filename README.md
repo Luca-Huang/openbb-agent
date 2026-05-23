@@ -16,10 +16,13 @@
 src/research_workbench/
 ├── config.py                 # 统一配置入口
 ├── models.py                 # 核心数据模型
-├── ingestion/                # 数据采集与标准化
+├── data_sources/             # Longbridge CLI 数据源与标准化
+├── analysis/                 # summary / scoring 等纯分析逻辑
+├── pipelines/                # 连接数据源、分析与输出的编排层
+├── outputs/                  # 生成文件的读写边界
+├── ingestion/                # watchlist 等用户输入加载
 │   └── watchlist.py          # Watchlist 加载与过滤
-├── research_store/           # 数据存储层
-│   ├── files.py              # Supabase + CSV 双路径读取
+├── research_store/           # schema 定义
 │   └── schema.py             # 核心表 schema 定义
 ├── signal_engine/            # 信号生成层
 │   ├── radar.py              # 触发检测 + 过滤 + 评分
@@ -30,10 +33,9 @@ src/research_workbench/
     └── README.md
 
 app.py                        # Streamlit 研究工作台主入口
-scripts/fetch_cn_data.py      # A 股基础数据拉取脚本 (yfinance)
 scripts/refresh.py            # 统一信号与快照刷新入口
 research_inputs/              # 输入数据（watchlist、手动事件）
-openbb_outputs/               # 输出数据（summary、history、signals）
+outputs/research_data/        # 输出数据（summary、history、signals）
 ```
 
 ## 快速开始
@@ -75,8 +77,7 @@ export SUPABASE_KEY="your-key"
 ### 4. 刷新数据
 
 ```bash
-python scripts/fetch_cn_data.py        # 1. 从 Yahoo Finance 拉取 A 股基础行情与财务数据
-python scripts/refresh.py              # 2. 运行信号引擎，生成今日买卖点判定与快照
+python scripts/refresh.py              # Fetch data through Longbridge CLI and build signals
 ```
 
 ### 5. 启动工作台
@@ -127,4 +128,4 @@ streamlit run app.py
 
 ## 数据采集
 
-主数据管道已重构为纯粹的 `scripts/fetch_cn_data.py`，专职从 `yfinance` 拉取 A 股数据，并剥离了对旧版复杂估值模型和多市场数据源的依赖。
+主数据管道通过 `scripts/refresh.py` 调用 Longbridge CLI，统一拉取 CN / HK / US 股票行情与估值字段。

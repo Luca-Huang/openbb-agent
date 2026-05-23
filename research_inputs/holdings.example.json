@@ -1,5 +1,5 @@
 {
-  "_doc": "Personal holdings — copy this to holdings.json (gitignored) and fill in real trades. Each position holds the chronological BUY/SELL log; current shares and cost are derived. Code is the bare A-share digit code matching akshare.",
+  "_doc": "Personal holdings - copy this to holdings.json (gitignored) and fill in real trades. Each position holds the chronological BUY/SELL log; current shares and cost are derived. Prefer Longbridge symbols such as 002602.SZ; bare A-share codes default to SZ in helper scripts.",
   "positions": [
     {
       "code": "002602",

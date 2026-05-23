@@ -2,7 +2,7 @@
 """Generate CSV files for manual Supabase import.
 
 When network constraints prevent running the automated backfill script,
-this helper reads the local `openbb_outputs` CSVs and emits two new files:
+this helper reads the local research output CSVs and emits two new files:
 
 * `supabase_equity_metrics_backfill.csv`
 * `supabase_equity_history_backfill.csv`
@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pandas as pd
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "openbb_outputs"
+DATA_DIR = Path(__file__).resolve().parent.parent / "outputs" / "research_data"
 SUMMARY_CSV = DATA_DIR / "three_month_summary.csv"
 HISTORY_CSV = DATA_DIR / "three_month_close_history.csv"
 SUMMARY_OUTPUT = DATA_DIR / "supabase_equity_metrics_backfill.csv"
