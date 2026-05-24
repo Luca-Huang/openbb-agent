@@ -107,5 +107,55 @@ class TestBuildThesisFromItem(unittest.TestCase):
         self.assertIn("peer_pe_median", t.missing)
 
 
+class TestScoreSegmentHealth(unittest.TestCase):
+    """Sanity-check the segment health scoring on synthetic fixtures."""
+
+    def _make_segments(self, rows):
+        """Build a 合计-classification frame from (year, segment, share, margin) tuples."""
+        df = pd.DataFrame(rows, columns=["year", "segment", "revenue_ratio", "gross_margin"])
+        df["fiscal_period"] = pd.to_datetime(df["year"].astype(str) + "-12-31")
+        df["classification"] = "合计"
+        df["revenue"] = df["revenue_ratio"] * 1e10
+        df["profit"] = df["revenue"] * df["gross_margin"]
+        return df
+
+    def test_returns_zero_when_empty(self):
+        from research_workbench.analysis.summary import score_segment_health
+        self.assertEqual(score_segment_health(None), 0.0)
+        self.assertEqual(score_segment_health(pd.DataFrame()), 0.0)
+
+    def test_over_concentration_penalized(self):
+        """One segment at 96% of revenue → 0 concentration points."""
+        from research_workbench.analysis.summary import score_segment_health
+        df = self._make_segments([
+            (2025, "core", 0.96, 0.50),
+            (2025, "other", 0.04, 0.20),
+            (2024, "core", 0.95, 0.48),
+            (2024, "other", 0.05, 0.18),
+            (2023, "core", 0.94, 0.45),
+            (2023, "other", 0.06, 0.16),
+        ])
+        # concentration 96% -> 0pts; margin trend rising (.45->.48->.50) -> +3;
+        # diversification: 1 secondary at 4% (< 5%) -> 0pts. Total = 3.
+        self.assertEqual(score_segment_health(df), 3.0)
+
+    def test_healthy_diversified(self):
+        """50-90% top + rising margins + 2+ secondaries > 5% → max-ish score."""
+        from research_workbench.analysis.summary import score_segment_health
+        df = self._make_segments([
+            (2025, "core", 0.60, 0.40),
+            (2025, "b", 0.25, 0.30),
+            (2025, "c", 0.15, 0.20),
+            (2024, "core", 0.62, 0.38),
+            (2024, "b", 0.23, 0.28),
+            (2024, "c", 0.15, 0.18),
+            (2023, "core", 0.65, 0.35),
+            (2023, "b", 0.22, 0.25),
+            (2023, "c", 0.13, 0.16),
+        ])
+        # concentration 60% (50-90) -> +4; margin trend rising -> +3; 2 secondaries > 5% -> +3. Total = 10.
+        self.assertEqual(score_segment_health(df), 10.0)
+
+
 if __name__ == "__main__":
     unittest.main()

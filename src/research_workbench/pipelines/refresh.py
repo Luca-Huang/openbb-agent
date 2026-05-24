@@ -178,6 +178,7 @@ class CNEnrichment:
             "earnings_forecast": _slice(self.earnings_forecasts),
             "dividend_history": _slice(self.dividends),
             "shareholder_changes": _slice(self.shareholder_changes),
+            "business_segments": _slice(self.business_segments),
         }
 
 

@@ -234,6 +234,92 @@ def score_shareholder_return(
     return min(15.0, score)
 
 
+def score_segment_health(business_segments: pd.DataFrame | None) -> float:
+    """Score business-line health from 主营构成 (revenue concentration + margin trend).
+
+    Inputs the long-form ``business_segments`` (one symbol's slice). Looks
+    at the top-level 合计 classification only — by-product / by-region rows
+    are too granular to assess company-wide health. Range: 0..10.
+
+    Sub-components:
+      • Concentration sanity (0-4):
+          top segment 50-90% of revenue → +4 (healthy core)
+          < 50%                          → +2 (diversified, possibly weak)
+          ≥ 90%                          → 0  (over-concentrated risk)
+      • Top-segment gross-margin trend over the most recent 3 annual reports
+          rising or flat                 → +3
+          mixed                          → +1
+          consistently declining         → 0  (margin compression risk)
+      • Secondary-line diversification: count of non-top segments with > 5%
+          revenue contribution
+          ≥ 2                            → +3 (multiple revenue streams)
+          1                              → +1
+          0                              → 0
+    """
+    if business_segments is None or business_segments.empty:
+        return 0.0
+    if "classification" not in business_segments.columns:
+        return 0.0
+    summary = business_segments[business_segments["classification"] == "合计"].copy()
+    if summary.empty:
+        return 0.0
+    summary = summary.dropna(subset=["fiscal_period"])
+    if summary.empty:
+        return 0.0
+
+    # Restrict to annual reports — quarterly breakdowns are often incomplete
+    # (one segment over-represented) and would mislead the concentration check.
+    annual = summary[summary["fiscal_period"].dt.month == 12]
+    if annual.empty:
+        return 0.0
+    latest_period = annual["fiscal_period"].max()
+    latest = annual[annual["fiscal_period"] == latest_period]
+    if latest.empty:
+        return 0.0
+    latest = latest.sort_values("revenue_ratio", ascending=False)
+    top_row = latest.iloc[0]
+    top_name = top_row.get("segment")
+    top_share = pd.to_numeric(top_row.get("revenue_ratio"), errors="coerce")
+
+    score = 0.0
+
+    # (a) Concentration sanity
+    if pd.notna(top_share):
+        if 0.50 <= top_share < 0.90:
+            score += 4
+        elif top_share < 0.50:
+            score += 2
+        # else (>= 0.90): no points
+
+    # (b) Top-segment margin trend over 3 annual reports
+    if top_name:
+        annual_top = summary[summary["segment"] == top_name].copy()
+        annual_top = annual_top[annual_top["fiscal_period"].dt.month == 12]
+        annual_top = annual_top.sort_values("fiscal_period").tail(3)
+        margins = pd.to_numeric(annual_top.get("gross_margin"), errors="coerce").dropna()
+        if len(margins) >= 2:
+            diffs = margins.diff().dropna()
+            rising_or_flat = (diffs >= -0.005).all()  # tolerance 0.5pp
+            declining_all = (diffs < 0).all()
+            if rising_or_flat:
+                score += 3
+            elif declining_all and len(diffs) >= 2:
+                pass  # 0 points - margin compression risk
+            else:
+                score += 1
+
+    # (c) Secondary-line diversification — count segments with > 5% revenue
+    others = latest[latest["segment"] != top_name]
+    others_share = pd.to_numeric(others.get("revenue_ratio"), errors="coerce").fillna(0)
+    sig_count = int((others_share > 0.05).sum())
+    if sig_count >= 2:
+        score += 3
+    elif sig_count == 1:
+        score += 1
+
+    return min(10.0, score)
+
+
 def score_abs_valuation(fund: dict[str, Any]) -> float:
     """Reward a low absolute PE and PB. Range: 0..20 (existing logic preserved)."""
     pe = fund.get("end_pe")
@@ -265,8 +351,9 @@ def score_fundamentals(
     earnings_forecast: pd.DataFrame | None = None,
     industry_peer_pe_median: float | None = None,
     dividend_history: pd.DataFrame | None = None,
+    business_segments: pd.DataFrame | None = None,
 ) -> dict[str, float]:
-    """Compute all eight fundamental scores; missing inputs degrade to 0."""
+    """Compute all nine fundamental scores; missing inputs degrade to 0."""
     current_pe = fund.get("end_pe")
     return {
         "score_abs_valuation": score_abs_valuation(fund),
@@ -275,6 +362,7 @@ def score_fundamentals(
         "score_peg": score_peg(current_pe, earnings_forecast),
         "score_growth_quality": score_growth_quality(financials),
         "score_balance_sheet": score_balance_sheet(financials),
+        "score_segment_health": score_segment_health(business_segments),
         "score_shareholder_return": score_shareholder_return(
             fund.get("dividend_yield"), dividend_history
         ),
@@ -292,6 +380,8 @@ def build_summary_row(
     earnings_forecast: pd.DataFrame | None = None,
     industry_peer_pe_median: float | None = None,
     dividend_history: pd.DataFrame | None = None,
+    business_segments: pd.DataFrame | None = None,
+    shareholder_changes: pd.DataFrame | None = None,  # currently unused, accepted for plumbing
 ) -> dict[str, Any] | None:
     """Assemble a single summary row by combining history stats, fundamentals,
     and the deep enrichment frames (CN-only, optional)."""
@@ -314,6 +404,7 @@ def build_summary_row(
         earnings_forecast=earnings_forecast,
         industry_peer_pe_median=industry_peer_pe_median,
         dividend_history=dividend_history,
+        business_segments=business_segments,
     )
     value_score = sum(scores.values())
 
