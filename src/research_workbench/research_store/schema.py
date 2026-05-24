@@ -155,15 +155,38 @@ FINANCIAL_SCHEMA: list[ColumnDef] = [
 
 
 # ---------------------------------------------------------------------------
+# Historical Valuation (daily PE/PB/PS series, A-shares via AKShare)
+# ---------------------------------------------------------------------------
+# Used by score_hist_valuation to compute current-vs-history percentile of
+# fundamental multiples. Eastmoney 'stock value' typically covers ~2018-present.
+VALUATION_HISTORY_SCHEMA: list[ColumnDef] = [
+    ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
+    ColumnDef("date", "datetime64[ns]", nullable=False, primary_key=True, description="估值日期"),
+    ColumnDef("close", "float64", description="当日收盘价"),
+    ColumnDef("market_cap", "float64", description="总市值"),
+    ColumnDef("pe_ttm", "float64", description="市盈率(TTM)"),
+    ColumnDef("pe_static", "float64", description="市盈率(静态)"),
+    ColumnDef("pb", "float64", description="市净率"),
+    ColumnDef("peg", "float64", description="PEG"),
+    ColumnDef("pcf", "float64", description="市现率"),
+    ColumnDef("ps", "float64", description="市销率"),
+    ColumnDef("data_source", "str", description="数据来源标识"),
+]
+
+
+# ---------------------------------------------------------------------------
 # Company Events
 # ---------------------------------------------------------------------------
 EVENT_SCHEMA: list[ColumnDef] = [
     ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
     ColumnDef("event_date", "datetime64[ns]", nullable=False, primary_key=True, description="事件日期"),
-    ColumnDef("event_type", "str", nullable=False, description="财报 / 业绩预告 / 回购 / 分红 / 管理层变化 / 重大公告"),
+    ColumnDef("event_type", "str", nullable=False, primary_key=True,
+              description="财报 / 业绩预告 / 业绩快报 / 分红 / 股东增减持 / 限售解禁 / 管理层变化 / 重大公告"),
     ColumnDef("importance", "str", description="high / medium / low"),
     ColumnDef("impact", "str", description="positive / neutral / negative / mixed"),
     ColumnDef("summary", "str", description="事件摘要"),
+    ColumnDef("event_value", "float64", description="事件相关数值(净利预测/分红金额/增减持股数 等)"),
+    ColumnDef("event_source", "str", description="数据来源(manual / akshare_em / akshare_ths / akshare_sina)"),
 ]
 
 

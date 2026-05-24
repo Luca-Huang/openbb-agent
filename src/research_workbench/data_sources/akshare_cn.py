@@ -24,7 +24,9 @@ log = logging.getLogger("data_sources.akshare_cn")
 
 DEFAULT_AKTOOLS_URL = "http://127.0.0.1:8080"
 SUPPORTED_MARKETS = {"CN"}
-DEFAULT_HTTP_TIMEOUT_SECONDS = 30
+DEFAULT_HTTP_TIMEOUT_SECONDS = 60
+# Market-wide endpoints (full-table downloads) need a longer ceiling.
+BULK_HTTP_TIMEOUT_SECONDS = 120
 
 
 class AKToolsError(RuntimeError):
@@ -213,6 +215,235 @@ class AKShareCNProvider:
         df["fiscal_year"] = df["fiscal_period"].dt.year.astype("Int64")
 
         return df.sort_values("fiscal_period", ascending=False).reset_index(drop=True)
+
+
+    # ------------------------------------------------------------------
+    # Historical valuation (PE/PB/PS daily series) — for hist-valuation score
+    # ------------------------------------------------------------------
+
+    def fetch_historical_valuation(self, symbol: str) -> pd.DataFrame:
+        """Fetch daily PE/PB/PS series from eastmoney 'stock value'.
+
+        Returns columns: date, close, pe_ttm, pe_static, pb, peg, ps, market_cap.
+        Coverage typically starts 2018 (~2000+ trading days).
+        """
+        log.info("AKShare CN: fetching historical valuation for %s", symbol)
+        code = symbol.split(".", 1)[0]
+        rows = _retry_get_json("/api/public/stock_value_em", {"symbol": code})
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        rename = {
+            "数据日期": "date",
+            "当日收盘价": "close",
+            "总市值": "market_cap",
+            "PE(TTM)": "pe_ttm",
+            "PE(静)": "pe_static",
+            "市净率": "pb",
+            "PEG值": "peg",
+            "市现率": "pcf",
+            "市销率": "ps",
+        }
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        for col in df.columns:
+            if col != "date":
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["symbol"] = symbol.upper()
+        df["data_source"] = "akshare_em"
+        return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Earnings preannouncement — input to PEG (forward EPS growth)
+    # ------------------------------------------------------------------
+
+    def fetch_earnings_preannouncement(self, symbol: str, report_date: str) -> pd.DataFrame:
+        """Fetch market-wide earnings preannouncement table on ``report_date``,
+        filtered to ``symbol``.
+
+        ``report_date`` is a fiscal period like ``20251231``. Returns the rows
+        for the given symbol (usually 1-2 rows: 归母净利 and 扣非净利预告).
+        """
+        log.info("AKShare CN: fetching earnings preannouncement %s @ %s", symbol, report_date)
+        # Market-wide table (~7800 rows for a quarter) needs the bulk timeout.
+        rows = _retry_get_json(
+            "/api/public/stock_yjyg_em",
+            {"date": report_date},
+            timeout_seconds=BULK_HTTP_TIMEOUT_SECONDS,
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        if "股票代码" not in df.columns:
+            return pd.DataFrame()
+        code = symbol.split(".", 1)[0]
+        match = df[df["股票代码"].astype(str) == code].copy()
+        if match.empty:
+            return match
+        match = match.rename(columns={
+            "股票代码": "code",
+            "股票简称": "name",
+            "预测指标": "indicator",
+            "业绩变动": "change_text",
+            "预测数值": "forecast_value",
+            "业绩变动幅度": "yoy_pct",
+            "预告类型": "forecast_type",
+            "上年同期值": "prior_year_value",
+            "公告日期": "announce_date",
+        })
+        for col in ("forecast_value", "yoy_pct", "prior_year_value"):
+            if col in match.columns:
+                match[col] = pd.to_numeric(match[col], errors="coerce")
+        match["announce_date"] = pd.to_datetime(match.get("announce_date"), errors="coerce")
+        match["symbol"] = symbol.upper()
+        match["fiscal_period"] = pd.to_datetime(report_date, format="%Y%m%d", errors="coerce")
+        return match.reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Industry peer snapshot — for peer-valuation score
+    # ------------------------------------------------------------------
+
+    def fetch_industry_classification(self, symbol: str) -> dict[str, Any]:
+        """Return the industry name and listing exchange for ``symbol``.
+
+        Uses ``stock_individual_info_em`` which returns a 7-row key-value table.
+        """
+        log.info("AKShare CN: fetching industry classification for %s", symbol)
+        code = symbol.split(".", 1)[0]
+        rows = _retry_get_json("/api/public/stock_individual_info_em", {"symbol": code})
+        if not rows:
+            return {}
+        # akshare returns a list of {item, value} rows
+        out = {}
+        for row in rows:
+            item = row.get("item") or row.get("项目") or row.get("indicator")
+            value = row.get("value") or row.get("值") or row.get("VALUE")
+            if item:
+                out[str(item)] = value
+        return {
+            "industry": out.get("行业") or out.get("INDUSTRY") or "",
+            "listing_date": out.get("上市时间") or "",
+            "total_shares": out.get("总股本") or "",
+            "circ_shares": out.get("流通股") or "",
+            "raw": out,
+        }
+
+    def fetch_industry_peers(self, industry_name: str) -> pd.DataFrame:
+        """List all A-share constituents of an eastmoney industry board.
+
+        Returns columns: code, name, price, change_pct, market_cap, pe, pb, ...
+        (whatever eastmoney returns for the board).
+        """
+        log.info("AKShare CN: fetching industry peers for %s", industry_name)
+        rows = _retry_get_json(
+            "/api/public/stock_board_industry_cons_em",
+            {"symbol": industry_name},
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        rename = {
+            "代码": "code",
+            "名称": "name",
+            "最新价": "last",
+            "涨跌幅": "change_pct",
+            "市盈率-动态": "pe_ttm",
+            "市净率": "pb",
+            "总市值": "market_cap",
+            "流通市值": "circ_market_cap",
+        }
+        keep = [c for c in rename if c in df.columns]
+        if not keep:
+            return df  # return raw if shape changed
+        df = df[keep].rename(columns=rename)
+        for col in df.columns:
+            if col not in ("code", "name"):
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df
+
+    # ------------------------------------------------------------------
+    # Events: dividends, shareholder changes
+    # ------------------------------------------------------------------
+
+    def fetch_dividend_history(self, symbol: str) -> pd.DataFrame:
+        """Fetch dividend history (新浪) with announce / ex-div dates and per-share payout."""
+        log.info("AKShare CN: fetching dividend history for %s", symbol)
+        code = symbol.split(".", 1)[0]
+        rows = _retry_get_json(
+            "/api/public/stock_history_dividend_detail",
+            {"symbol": code, "indicator": "分红"},
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        rename = {
+            "公告日期": "announce_date",
+            "送股": "bonus_shares",
+            "转增": "transfer_shares",
+            "派息": "cash_dividend",
+            "进度": "status",
+            "除权除息日": "ex_div_date",
+            "股权登记日": "record_date",
+            "红股上市日": "bonus_listing_date",
+        }
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        for col in ("announce_date", "ex_div_date", "record_date", "bonus_listing_date"):
+            if col in df.columns:
+                df[col] = pd.to_datetime(df[col], errors="coerce")
+        for col in ("bonus_shares", "transfer_shares", "cash_dividend"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["symbol"] = symbol.upper()
+        return df.sort_values("announce_date", ascending=False, na_position="last").reset_index(drop=True)
+
+    def fetch_shareholder_changes(self, symbol: str) -> pd.DataFrame:
+        """Fetch major shareholder buy/sell records (同花顺)."""
+        log.info("AKShare CN: fetching shareholder changes for %s", symbol)
+        code = symbol.split(".", 1)[0]
+        rows = _retry_get_json(
+            "/api/public/stock_shareholder_change_ths",
+            {"symbol": code},
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        rename = {
+            "公告日期": "announce_date",
+            "变动股东": "shareholder",
+            "变动数量": "change_text",
+            "交易均价": "avg_price",
+            "剩余股份总数": "remaining_text",
+            "变动期间": "change_period",
+            "变动途径": "channel",
+        }
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        if "announce_date" in df.columns:
+            df["announce_date"] = pd.to_datetime(df["announce_date"], errors="coerce")
+        if "avg_price" in df.columns:
+            df["avg_price"] = pd.to_numeric(df["avg_price"], errors="coerce")
+        # Parse change_text like "减持990.00万" or "增持1600.00" to signed share count
+        if "change_text" in df.columns:
+            def _parse(text: Any) -> float | None:
+                s = str(text or "")
+                sign = 1.0 if "增" in s else (-1.0 if "减" in s else None)
+                if sign is None:
+                    return None
+                # strip non-numeric except dot
+                num = "".join(ch for ch in s if ch.isdigit() or ch == ".")
+                if not num:
+                    return None
+                value = float(num)
+                if "万" in s:
+                    value *= 1e4
+                elif "亿" in s:
+                    value *= 1e8
+                return sign * value
+            df["change_shares"] = df["change_text"].map(_parse)
+        df["symbol"] = symbol.upper()
+        return df.sort_values("announce_date", ascending=False, na_position="last").reset_index(drop=True)
 
 
 def get_provider(market: str = "CN") -> AKShareCNProvider:
