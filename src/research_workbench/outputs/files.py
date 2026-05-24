@@ -193,6 +193,11 @@ def save_earnings_express(df: pd.DataFrame, settings: AppSettings) -> None:
     df.to_csv(settings.earnings_express_path, index=False)
 
 
+def save_northbound_holdings(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.northbound_holdings_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.northbound_holdings_path, index=False)
+
+
 def save_auto_events(df: pd.DataFrame, settings: AppSettings) -> None:
     settings.auto_events_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(settings.auto_events_path, index=False)

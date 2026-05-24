@@ -87,6 +87,7 @@ class CNEnrichment:
     earnings_express: pd.DataFrame = field(default_factory=pd.DataFrame)
     dividends: pd.DataFrame = field(default_factory=pd.DataFrame)
     shareholder_changes: pd.DataFrame = field(default_factory=pd.DataFrame)
+    northbound_holdings: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def for_symbol(self, symbol: str) -> dict[str, pd.DataFrame | None]:
         sym = symbol.upper()
@@ -162,6 +163,7 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
     express_frames: list[pd.DataFrame] = []
     div_frames: list[pd.DataFrame] = []
     chg_frames: list[pd.DataFrame] = []
+    north_frames: list[pd.DataFrame] = []
 
     for _, item in cn.iterrows():
         symbol = str(item["symbol"])
@@ -188,6 +190,7 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
              express_frames)
         _try("dividend_history", lambda: akp.fetch_dividend_history(symbol), div_frames)
         _try("shareholder_changes", lambda: akp.fetch_shareholder_changes(symbol), chg_frames)
+        _try("northbound_holding", lambda: akp.fetch_northbound_holding(symbol), north_frames)
 
     def _concat(frames):
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -206,6 +209,7 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
         earnings_express=_concat(express_frames),
         dividends=_concat(div_frames),
         shareholder_changes=_concat(chg_frames),
+        northbound_holdings=_concat(north_frames),
     )
 
 

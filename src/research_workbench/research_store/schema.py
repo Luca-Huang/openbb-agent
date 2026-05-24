@@ -182,6 +182,27 @@ EARNINGS_EXPRESS_SCHEMA: list[ColumnDef] = [
 
 
 # ---------------------------------------------------------------------------
+# Northbound Holdings (沪深港通北向资金, daily series via AKShare)
+# ---------------------------------------------------------------------------
+# Foreign holdings of A-share constituents under the HK-Connect program.
+# Coverage typically starts 2017-03 (~1500-2000 trading days per symbol).
+# % of outstanding shares and daily net-buy delta are the headline signals.
+NORTHBOUND_HOLDING_SCHEMA: list[ColumnDef] = [
+    ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
+    ColumnDef("date", "datetime64[ns]", nullable=False, primary_key=True, description="持股日期"),
+    ColumnDef("close", "float64", description="当日收盘价"),
+    ColumnDef("change_pct", "float64", description="当日涨跌幅(百分比)"),
+    ColumnDef("north_shares", "float64", description="北向持股数量"),
+    ColumnDef("north_value", "float64", description="北向持股市值"),
+    ColumnDef("north_pct_of_outstanding", "float64", description="北向持股占 A 股总股本百分比"),
+    ColumnDef("north_net_buy_shares", "float64", description="今日北向净增持股数(正为买、负为卖)"),
+    ColumnDef("north_net_buy_cny", "float64", description="今日北向净增持金额(CNY)"),
+    ColumnDef("north_value_change", "float64", description="今日北向持股市值变化"),
+    ColumnDef("data_source", "str", description="数据来源标识"),
+]
+
+
+# ---------------------------------------------------------------------------
 # Historical Valuation (daily PE/PB/PS series, A-shares via AKShare)
 # ---------------------------------------------------------------------------
 # Used by score_hist_valuation to compute current-vs-history percentile of

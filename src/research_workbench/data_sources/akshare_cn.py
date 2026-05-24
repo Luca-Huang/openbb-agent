@@ -503,6 +503,48 @@ class AKShareCNProvider:
         return df
 
     # ------------------------------------------------------------------
+    # Northbound holding (沪深港通-北向资金) — daily time series since 2017
+    # ------------------------------------------------------------------
+
+    def fetch_northbound_holding(self, symbol: str) -> pd.DataFrame:
+        """Fetch the daily northbound (HK-Connect inflow) holding series.
+
+        Returns ~1500-2000 trading-day rows since 2017-03 with daily snapshots
+        of foreign holding shares, value, % of A-shares outstanding, plus the
+        net buy/sell delta for the day. This is one of the strongest sentiment
+        signals on the A-share market (and not available from Longbridge).
+        """
+        log.info("AKShare CN: fetching northbound holdings for %s", symbol)
+        code = symbol.split(".", 1)[0]
+        rows = _retry_get_json(
+            "/api/public/stock_hsgt_individual_em",
+            {"symbol": code},
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        rename = {
+            "持股日期": "date",
+            "当日收盘价": "close",
+            "当日涨跌幅": "change_pct",
+            "持股数量": "north_shares",
+            "持股市值": "north_value",
+            "持股数量占A股百分比": "north_pct_of_outstanding",
+            "今日增持股数": "north_net_buy_shares",
+            "今日增持资金": "north_net_buy_cny",
+            "今日持股市值变化": "north_value_change",
+        }
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+        for col in df.columns:
+            if col != "date":
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["symbol"] = symbol.upper()
+        df["data_source"] = "akshare_em"
+        return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
+
+    # ------------------------------------------------------------------
     # Events: dividends, shareholder changes
     # ------------------------------------------------------------------
 

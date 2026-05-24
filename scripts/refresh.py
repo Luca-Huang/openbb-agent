@@ -32,6 +32,7 @@ from research_workbench.outputs.files import (
     save_financials,
     save_financials_quarterly,
     save_history,
+    save_northbound_holdings,
     save_signals_snapshot,
     save_summary,
     save_valuation_history,
@@ -139,6 +140,11 @@ def main() -> None:
             log.info("Saved %d earnings-express rows to %s",
                      len(enrichment.earnings_express),
                      SETTINGS.earnings_express_path.name)
+        if not enrichment.northbound_holdings.empty:
+            save_northbound_holdings(enrichment.northbound_holdings, SETTINGS)
+            log.info("Saved %d northbound-holding rows to %s",
+                     len(enrichment.northbound_holdings),
+                     SETTINGS.northbound_holdings_path.name)
 
         auto_events = build_all_events(enrichment)
         if not auto_events.empty:
