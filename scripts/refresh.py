@@ -24,14 +24,22 @@ import pandas as pd
 from research_workbench.config import default_settings
 from research_workbench.ingestion.watchlist import load_watchlist, watchlist_symbols
 from research_workbench.outputs.files import (
+    load_events,
     load_history,
-    load_manual_events,
     load_summary,
+    save_auto_events,
+    save_financials,
     save_history,
     save_signals_snapshot,
     save_summary,
+    save_valuation_history,
 )
-from research_workbench.pipelines.refresh import build_all_summaries, fetch_all_history
+from research_workbench.pipelines.refresh import (
+    build_all_events,
+    build_all_summaries,
+    fetch_all_history,
+    fetch_cn_enrichment,
+)
 from research_workbench.signal_engine.radar import DEFAULT_RADAR_CONFIG, build_current_signals
 
 logging.basicConfig(
@@ -106,9 +114,28 @@ def main() -> None:
         summary = load_summary(SETTINGS)
         if not summary.empty and symbols:
             summary = summary[summary["symbol"].isin(symbols)].copy()
+        enrichment = None
     else:
-        log.info("Building summaries from Longbridge CLI...")
-        summary = build_all_summaries(watchlist, history)
+        log.info("Fetching CN deep enrichment via AKShare (AKTools)...")
+        enrichment = fetch_cn_enrichment(watchlist)
+        if not enrichment.financials.empty:
+            save_financials(enrichment.financials, SETTINGS)
+            log.info("Saved %d financial rows to %s",
+                     len(enrichment.financials), SETTINGS.financials_path.name)
+        if not enrichment.valuation_history.empty:
+            save_valuation_history(enrichment.valuation_history, SETTINGS)
+            log.info("Saved %d valuation-history rows to %s",
+                     len(enrichment.valuation_history),
+                     SETTINGS.valuation_history_path.name)
+
+        auto_events = build_all_events(enrichment)
+        if not auto_events.empty:
+            save_auto_events(auto_events, SETTINGS)
+            log.info("Saved %d auto events to %s",
+                     len(auto_events), SETTINGS.auto_events_path.name)
+
+        log.info("Building summaries from Longbridge + AKShare enrichment...")
+        summary = build_all_summaries(watchlist, history, enrichment)
         if not summary.empty:
             save_summary(summary, SETTINGS)
             log.info("Saved %d summary rows to %s", len(summary), SETTINGS.summary_path.name)
@@ -118,8 +145,8 @@ def main() -> None:
     if args.only == "summary":
         return
 
-    events = load_manual_events(SETTINGS)
-    log.info("Events: %d rows", len(events))
+    events = load_events(SETTINGS)
+    log.info("Events: %d rows (manual + auto)", len(events))
 
     log.info("Building current signals...")
     signals = build_current_signals(summary, history, watchlist, events, DEFAULT_RADAR_CONFIG)
