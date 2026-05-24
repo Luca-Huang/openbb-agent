@@ -444,30 +444,64 @@ class AKShareCNProvider:
     # Industry peer snapshot — for peer-valuation score
     # ------------------------------------------------------------------
 
-    def fetch_industry_classification(self, symbol: str) -> dict[str, Any]:
+    def fetch_industry_classification(
+        self,
+        symbol: str,
+        yjbb_market_df: pd.DataFrame | None = None,
+    ) -> dict[str, Any]:
         """Return the industry name and listing exchange for ``symbol``.
 
-        Uses ``stock_individual_info_em`` which returns a 7-row key-value table.
+        Primary source is ``stock_individual_info_em`` (push2.eastmoney). That
+        endpoint is intermittently RST-prone from mainland networks, so this
+        falls back to the ``industry`` column of the market-wide
+        :meth:`fetch_earnings_express_market` table when a ``yjbb_market_df``
+        is supplied — the fallback only fills the industry name, not the rest.
         """
         log.info("AKShare CN: fetching industry classification for %s", symbol)
         code = symbol.split(".", 1)[0]
-        rows = _retry_get_json("/api/public/stock_individual_info_em", {"symbol": code})
-        if not rows:
-            return {}
-        # akshare returns a list of {item, value} rows
-        out = {}
-        for row in rows:
-            item = row.get("item") or row.get("项目") or row.get("indicator")
-            value = row.get("value") or row.get("值") or row.get("VALUE")
-            if item:
-                out[str(item)] = value
-        return {
-            "industry": out.get("行业") or out.get("INDUSTRY") or "",
-            "listing_date": out.get("上市时间") or "",
-            "total_shares": out.get("总股本") or "",
-            "circ_shares": out.get("流通股") or "",
-            "raw": out,
-        }
+        try:
+            rows = _retry_get_json(
+                "/api/public/stock_individual_info_em",
+                {"symbol": code},
+            )
+        except AKToolsError as exc:
+            log.warning("stock_individual_info_em failed for %s: %s", symbol, exc)
+            rows = None
+
+        if rows:
+            # akshare returns a list of {item, value} rows
+            out: dict[str, Any] = {}
+            for row in rows:
+                item = row.get("item") or row.get("项目") or row.get("indicator")
+                value = row.get("value") or row.get("值") or row.get("VALUE")
+                if item:
+                    out[str(item)] = value
+            return {
+                "industry": out.get("行业") or out.get("INDUSTRY") or "",
+                "listing_date": out.get("上市时间") or "",
+                "total_shares": out.get("总股本") or "",
+                "circ_shares": out.get("流通股") or "",
+                "data_source": "akshare_em_individual",
+                "raw": out,
+            }
+
+        # Fallback: pluck the industry name out of the market yjbb table.
+        if yjbb_market_df is not None and not yjbb_market_df.empty:
+            if "code" in yjbb_market_df.columns and "industry" in yjbb_market_df.columns:
+                match = yjbb_market_df[yjbb_market_df["code"].astype(str) == code]
+                if not match.empty:
+                    industry = match.iloc[0]["industry"]
+                    if industry:
+                        log.info("  industry fallback from yjbb: %s -> %s", symbol, industry)
+                        return {
+                            "industry": str(industry),
+                            "listing_date": "",
+                            "total_shares": "",
+                            "circ_shares": "",
+                            "data_source": "akshare_yjbb_fallback",
+                            "raw": {},
+                        }
+        return {}
 
     def fetch_industry_peers(self, industry_name: str) -> pd.DataFrame:
         """List all A-share constituents of an eastmoney industry board.

@@ -84,7 +84,9 @@ def fetch_all_capital_flow(watchlist: pd.DataFrame) -> pd.DataFrame:
     if watchlist.empty:
         return pd.DataFrame()
 
-    today = pd.Timestamp.utcnow().normalize().tz_localize(None)
+    # Local-date timestamp: utcnow().normalize() can land on the wrong day for
+    # CST-evening runs (UTC is 8h behind). pd.Timestamp.now() is naive local.
+    today = pd.Timestamp.now().normalize()
     rows: list[dict] = []
     for _, item in watchlist.iterrows():
         market = str(item.get("market", "")).upper()
@@ -284,15 +286,22 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
 # ---------------------------------------------------------------------------
 
 
-def _industry_peer_pe_median(symbol: str) -> float | None:
-    """Best-effort peer-PE median lookup; returns None on any failure."""
+def _industry_peer_pe_median(
+    symbol: str,
+    yjbb_market_df: pd.DataFrame | None = None,
+) -> float | None:
+    """Best-effort peer-PE median lookup; returns None on any failure.
+
+    ``yjbb_market_df`` (already fetched market-wide 业绩快报 table) is used as
+    the fallback industry-classification source when push2 is flapping.
+    """
     try:
         from research_workbench.data_sources.akshare_cn import get_provider as ak_get_provider
     except ImportError:
         return None
     akp = ak_get_provider("CN")
     try:
-        info = akp.fetch_industry_classification(symbol)
+        info = akp.fetch_industry_classification(symbol, yjbb_market_df=yjbb_market_df)
         industry = info.get("industry") if info else None
         if not industry:
             return None
@@ -335,7 +344,12 @@ def build_all_summaries(
         if market == "CN" and enrichment is not None:
             sliced = enrichment.for_symbol(symbol)
             kwargs.update(sliced)
-            kwargs["industry_peer_pe_median"] = _industry_peer_pe_median(symbol)
+            # Pass the already-fetched market yjbb table as a fallback source
+            # for industry classification when push2.eastmoney is flapping.
+            kwargs["industry_peer_pe_median"] = _industry_peer_pe_median(
+                symbol,
+                yjbb_market_df=enrichment.earnings_express if enrichment is not None else None,
+            )
 
         row = build_summary_row(item, history, fund_data, **kwargs)
         if row is not None:
