@@ -182,6 +182,31 @@ EARNINGS_EXPRESS_SCHEMA: list[ColumnDef] = [
 
 
 # ---------------------------------------------------------------------------
+# Capital Flow (主力资金流向, daily snapshot via Longbridge CLI)
+# ---------------------------------------------------------------------------
+# Today's distribution of buy/sell across order size buckets. Units are 万元
+# (10k CNY) — large = 大单 (>= 100万 CNY), medium = 中单, small = 小单. The
+# net_main column (large + medium net) is the conventional "institutional
+# / main-force flow" signal.
+CAPITAL_FLOW_SCHEMA: list[ColumnDef] = [
+    ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
+    ColumnDef("date", "datetime64[ns]", nullable=False, primary_key=True, description="资金流快照日期"),
+    ColumnDef("large_in", "float64", description="大单买入(万元)"),
+    ColumnDef("large_out", "float64", description="大单卖出(万元)"),
+    ColumnDef("net_large", "float64", description="大单净流入"),
+    ColumnDef("medium_in", "float64", description="中单买入"),
+    ColumnDef("medium_out", "float64", description="中单卖出"),
+    ColumnDef("net_medium", "float64", description="中单净流入"),
+    ColumnDef("small_in", "float64", description="小单买入"),
+    ColumnDef("small_out", "float64", description="小单卖出"),
+    ColumnDef("net_small", "float64", description="小单净流入"),
+    ColumnDef("net_main", "float64", description="主力净流入 = 大单 + 中单(万元)"),
+    ColumnDef("net_total", "float64", description="全部净流入"),
+    ColumnDef("data_source", "str", description="数据来源标识"),
+]
+
+
+# ---------------------------------------------------------------------------
 # Northbound Holdings (沪深港通北向资金, daily series via AKShare)
 # ---------------------------------------------------------------------------
 # Foreign holdings of A-share constituents under the HK-Connect program.

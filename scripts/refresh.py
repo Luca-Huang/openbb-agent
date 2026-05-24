@@ -24,10 +24,12 @@ import pandas as pd
 from research_workbench.config import default_settings
 from research_workbench.ingestion.watchlist import load_watchlist, watchlist_symbols
 from research_workbench.outputs.files import (
+    load_capital_flow_history,
     load_events,
     load_history,
     load_summary,
     save_auto_events,
+    save_capital_flow_history,
     save_earnings_express,
     save_financials,
     save_financials_quarterly,
@@ -40,8 +42,10 @@ from research_workbench.outputs.files import (
 from research_workbench.pipelines.refresh import (
     build_all_events,
     build_all_summaries,
+    fetch_all_capital_flow,
     fetch_all_history,
     fetch_cn_enrichment,
+    merge_capital_flow_history,
 )
 from research_workbench.signal_engine.radar import DEFAULT_RADAR_CONFIG, build_current_signals
 
@@ -108,6 +112,18 @@ def main() -> None:
         len(history),
         history["symbol"].nunique() if "symbol" in history.columns else 0,
     )
+
+    # Capital flow snapshot — appends today's row to the accumulating history.
+    if not args.no_fetch:
+        log.info("Fetching capital-flow snapshot for all symbols...")
+        snapshot = fetch_all_capital_flow(watchlist)
+        if not snapshot.empty:
+            history_cf = load_capital_flow_history(SETTINGS)
+            merged = merge_capital_flow_history(snapshot, history_cf)
+            save_capital_flow_history(merged, SETTINGS)
+            log.info("Capital flow: +%d new rows, %d total in %s",
+                     len(snapshot), len(merged),
+                     SETTINGS.capital_flow_history_path.name)
 
     if args.only == "history":
         return

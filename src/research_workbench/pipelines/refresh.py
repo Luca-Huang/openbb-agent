@@ -21,7 +21,11 @@ import pandas as pd
 
 from research_workbench.analysis.summary import build_summary_row
 from research_workbench.data_sources.indicators import add_technical_indicators
-from research_workbench.data_sources.longbridge import LOOKBACK_DAYS, get_provider
+from research_workbench.data_sources.longbridge import (
+    LOOKBACK_DAYS,
+    LongbridgeCLIProvider,
+    get_provider,
+)
 
 log = logging.getLogger("pipelines.refresh")
 
@@ -64,6 +68,68 @@ def fetch_all_history(watchlist: pd.DataFrame) -> pd.DataFrame:
     if not all_dfs:
         return pd.DataFrame()
     return pd.concat(all_dfs, ignore_index=True)
+
+
+# ---------------------------------------------------------------------------
+# Stage 1b: capital flow snapshot (one row per symbol per refresh)
+# ---------------------------------------------------------------------------
+
+
+def fetch_all_capital_flow(watchlist: pd.DataFrame) -> pd.DataFrame:
+    """Fetch today's capital-flow snapshot for every symbol in the watchlist.
+
+    Returns one row per symbol with the date stamped to today. Caller is
+    expected to append + deduplicate against any prior history file.
+    """
+    if watchlist.empty:
+        return pd.DataFrame()
+
+    today = pd.Timestamp.utcnow().normalize().tz_localize(None)
+    rows: list[dict] = []
+    for _, item in watchlist.iterrows():
+        market = str(item.get("market", "")).upper()
+        symbol = str(item["symbol"])
+        try:
+            provider = get_provider(market)
+        except ValueError:
+            continue
+        # Only LongbridgeCLIProvider exposes fetch_capital_flow_snapshot.
+        if not isinstance(provider, LongbridgeCLIProvider):
+            continue
+        try:
+            snap = provider.fetch_capital_flow_snapshot(symbol)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("capital flow %s failed: %s", symbol, exc)
+            continue
+        if not snap:
+            continue
+        snap["date"] = today
+        snap["data_source"] = "longbridge"
+        # Drop the raw CLI timestamp; date is the canonical PK.
+        snap.pop("timestamp", None)
+        rows.append(snap)
+
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+def merge_capital_flow_history(
+    new_snapshot: pd.DataFrame,
+    existing: pd.DataFrame,
+) -> pd.DataFrame:
+    """Append today's snapshot to history, dropping duplicates on (symbol, date)."""
+    if new_snapshot.empty:
+        return existing
+    if existing is None or existing.empty:
+        return new_snapshot
+    combined = pd.concat([existing, new_snapshot], ignore_index=True)
+    combined["date"] = pd.to_datetime(combined["date"], errors="coerce")
+    combined = combined.dropna(subset=["date", "symbol"])
+    combined = (
+        combined.sort_values(["symbol", "date"])
+        .drop_duplicates(subset=["symbol", "date"], keep="last")
+        .reset_index(drop=True)
+    )
+    return combined
 
 
 # ---------------------------------------------------------------------------

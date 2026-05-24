@@ -34,6 +34,7 @@ class AppSettings:
     valuation_history_path: Path = field(default=Path(""))
     earnings_express_path: Path = field(default=Path(""))
     northbound_holdings_path: Path = field(default=Path(""))
+    capital_flow_history_path: Path = field(default=Path(""))
     auto_events_path: Path = field(default=Path(""))
 
     refresh: RefreshSchedule = field(default_factory=RefreshSchedule)
@@ -58,5 +59,6 @@ def default_settings(repo_root: Path) -> AppSettings:
         valuation_history_path=data_dir / "valuation_history.csv",
         earnings_express_path=data_dir / "earnings_express.csv",
         northbound_holdings_path=data_dir / "northbound_holdings.csv",
+        capital_flow_history_path=data_dir / "capital_flow_history.csv",
         auto_events_path=data_dir / "auto_events.csv",
     )

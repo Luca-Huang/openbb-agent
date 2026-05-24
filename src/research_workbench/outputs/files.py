@@ -198,6 +198,22 @@ def save_northbound_holdings(df: pd.DataFrame, settings: AppSettings) -> None:
     df.to_csv(settings.northbound_holdings_path, index=False)
 
 
+def load_capital_flow_history(settings: AppSettings) -> pd.DataFrame:
+    if not getattr(settings, "capital_flow_history_path", None) or not settings.capital_flow_history_path.exists():
+        return pd.DataFrame()
+    df = pd.read_csv(settings.capital_flow_history_path)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    if "symbol" in df.columns:
+        df["symbol"] = df["symbol"].astype(str).str.upper()
+    return df
+
+
+def save_capital_flow_history(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.capital_flow_history_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.capital_flow_history_path, index=False)
+
+
 def save_auto_events(df: pd.DataFrame, settings: AppSettings) -> None:
     settings.auto_events_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(settings.auto_events_path, index=False)

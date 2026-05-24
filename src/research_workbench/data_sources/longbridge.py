@@ -114,6 +114,49 @@ class LongbridgeCLIProvider:
             .reset_index(drop=True)
         )
 
+    def fetch_capital_flow_snapshot(self, symbol: str) -> dict[str, Any]:
+        """Fetch today's capital-flow snapshot (大/中/小单 in/out 万元).
+
+        Returns a flat dict with normalized English keys:
+            timestamp, large_in, large_out, medium_in, medium_out,
+            small_in, small_out, net_large, net_medium, net_small,
+            net_main (大+中), net_total.
+
+        Units are 万元 (10k CNY) per the Longbridge CLI output. Empty dict
+        when the snapshot is unavailable (e.g. before market open).
+        """
+        log.info("Longbridge: fetching capital flow snapshot for %s", symbol)
+        try:
+            payload = _run_longbridge(["capital", symbol])
+        except LongbridgeCLIError as exc:
+            log.warning("capital snapshot failed for %s: %s", symbol, exc)
+            return {}
+        if not payload or not isinstance(payload, dict):
+            return {}
+        cin = payload.get("capital_in") or {}
+        cout = payload.get("capital_out") or {}
+
+        def _f(d: dict, k: str) -> float:
+            v = _to_float(d.get(k))
+            return float(v) if v is not None else 0.0
+
+        large_in, large_out = _f(cin, "large"), _f(cout, "large")
+        med_in, med_out = _f(cin, "medium"), _f(cout, "medium")
+        small_in, small_out = _f(cin, "small"), _f(cout, "small")
+        net_large = large_in - large_out
+        net_medium = med_in - med_out
+        net_small = small_in - small_out
+
+        return {
+            "symbol": symbol.upper(),
+            "timestamp": payload.get("timestamp"),
+            "large_in": large_in, "large_out": large_out, "net_large": net_large,
+            "medium_in": med_in, "medium_out": med_out, "net_medium": net_medium,
+            "small_in": small_in, "small_out": small_out, "net_small": net_small,
+            "net_main": net_large + net_medium,
+            "net_total": net_large + net_medium + net_small,
+        }
+
     def fetch_fundamentals(self, symbol: str) -> dict[str, Any]:
         log.info("Longbridge: fetching fundamentals for %s", symbol)
         static_rows = _run_longbridge(["static", symbol, "--lang", "zh-CN"])
