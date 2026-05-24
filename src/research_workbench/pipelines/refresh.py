@@ -133,6 +133,16 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
     akp = ak_get_provider("CN")
     report_date = _latest_fiscal_year_end()
 
+    # Pull the market-wide preannouncement table once, then slice per symbol.
+    # Calling the per-symbol variant N times re-downloads ~7800 rows N times.
+    log.info("CN enrichment: pre-fetching market preannouncement table")
+    try:
+        market_yjyg = akp.fetch_earnings_forecast_market(report_date)
+        log.info("  market yjyg: %d rows", len(market_yjyg))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("  market yjyg fetch failed: %s", exc)
+        market_yjyg = pd.DataFrame()
+
     fin_frames: list[pd.DataFrame] = []
     val_frames: list[pd.DataFrame] = []
     fcst_frames: list[pd.DataFrame] = []
@@ -156,7 +166,8 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
         _try("financials", lambda: akp.fetch_annual_financials(symbol), fin_frames)
         _try("valuation_history", lambda: akp.fetch_historical_valuation(symbol), val_frames)
         _try("earnings_forecast",
-             lambda: akp.fetch_earnings_preannouncement(symbol, report_date), fcst_frames)
+             lambda: akp.fetch_earnings_preannouncement(symbol, report_date, market_df=market_yjyg),
+             fcst_frames)
         _try("dividend_history", lambda: akp.fetch_dividend_history(symbol), div_frames)
         _try("shareholder_changes", lambda: akp.fetch_shareholder_changes(symbol), chg_frames)
 

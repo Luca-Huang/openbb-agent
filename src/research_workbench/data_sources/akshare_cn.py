@@ -258,15 +258,51 @@ class AKShareCNProvider:
     # Earnings preannouncement — input to PEG (forward EPS growth)
     # ------------------------------------------------------------------
 
-    def fetch_earnings_preannouncement(self, symbol: str, report_date: str) -> pd.DataFrame:
-        """Fetch market-wide earnings preannouncement table on ``report_date``,
-        filtered to ``symbol``.
+    _YJYG_RENAME = {
+        "股票代码": "code",
+        "股票简称": "name",
+        "预测指标": "indicator",
+        "业绩变动": "change_text",
+        "预测数值": "forecast_value",
+        "业绩变动幅度": "yoy_pct",
+        "预告类型": "forecast_type",
+        "上年同期值": "prior_year_value",
+        "公告日期": "announce_date",
+    }
 
-        ``report_date`` is a fiscal period like ``20251231``. Returns the rows
-        for the given symbol (usually 1-2 rows: 归母净利 and 扣非净利预告).
+    @staticmethod
+    def _normalize_yjyg(df: pd.DataFrame) -> pd.DataFrame:
+        """Rename cols, parse numerics, attach canonical symbol."""
+        rename = AKShareCNProvider._YJYG_RENAME
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        for col in ("forecast_value", "yoy_pct", "prior_year_value"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "announce_date" in df.columns:
+            df["announce_date"] = pd.to_datetime(df["announce_date"], errors="coerce")
+        if "code" in df.columns:
+            # Map 6-digit code to canonical .SZ/.SH suffix.
+            def _suffix(code: str) -> str:
+                code = str(code)
+                if code.startswith(("0", "2", "3")):
+                    return f"{code}.SZ"
+                if code.startswith(("5", "6", "9")):
+                    return f"{code}.SH"
+                if code.startswith("8"):
+                    return f"{code}.BJ"
+                return code
+            df["symbol"] = df["code"].map(_suffix)
+        return df
+
+    def fetch_earnings_forecast_market(self, report_date: str) -> pd.DataFrame:
+        """Fetch the FULL market preannouncement table for ``report_date``.
+
+        Use this once per refresh and filter per-symbol downstream — calling
+        the per-symbol variant N times re-downloads the same 7000+-row table
+        N times. ``report_date`` like ``20251231``.
         """
-        log.info("AKShare CN: fetching earnings preannouncement %s @ %s", symbol, report_date)
-        # Market-wide table (~7800 rows for a quarter) needs the bulk timeout.
+        log.info("AKShare CN: fetching market yjyg table @ %s", report_date)
         rows = _retry_get_json(
             "/api/public/stock_yjyg_em",
             {"date": report_date},
@@ -274,28 +310,31 @@ class AKShareCNProvider:
         )
         if not rows:
             return pd.DataFrame()
-        df = pd.DataFrame(rows)
-        if "股票代码" not in df.columns:
+        df = self._normalize_yjyg(pd.DataFrame(rows))
+        df["fiscal_period"] = pd.to_datetime(report_date, format="%Y%m%d", errors="coerce")
+        return df.reset_index(drop=True)
+
+    def fetch_earnings_preannouncement(
+        self,
+        symbol: str,
+        report_date: str,
+        market_df: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """Filter the market preannouncement table to a single ``symbol``.
+
+        If ``market_df`` is supplied (already fetched via
+        :meth:`fetch_earnings_forecast_market`), it's filtered locally. Otherwise
+        this fetches the full table for ``report_date`` — fine for ad-hoc one-off
+        queries, but wasteful inside a multi-symbol pipeline loop.
+        """
+        if market_df is None:
+            market_df = self.fetch_earnings_forecast_market(report_date)
+        if market_df.empty or "code" not in market_df.columns:
             return pd.DataFrame()
         code = symbol.split(".", 1)[0]
-        match = df[df["股票代码"].astype(str) == code].copy()
+        match = market_df[market_df["code"].astype(str) == code].copy()
         if match.empty:
             return match
-        match = match.rename(columns={
-            "股票代码": "code",
-            "股票简称": "name",
-            "预测指标": "indicator",
-            "业绩变动": "change_text",
-            "预测数值": "forecast_value",
-            "业绩变动幅度": "yoy_pct",
-            "预告类型": "forecast_type",
-            "上年同期值": "prior_year_value",
-            "公告日期": "announce_date",
-        })
-        for col in ("forecast_value", "yoy_pct", "prior_year_value"):
-            if col in match.columns:
-                match[col] = pd.to_numeric(match[col], errors="coerce")
-        match["announce_date"] = pd.to_datetime(match.get("announce_date"), errors="coerce")
         match["symbol"] = symbol.upper()
         match["fiscal_period"] = pd.to_datetime(report_date, format="%Y%m%d", errors="coerce")
         return match.reset_index(drop=True)
