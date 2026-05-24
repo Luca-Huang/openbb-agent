@@ -12,4 +12,5 @@ outputs/holdings_snapshots/
 
 # Service logs and scratch directories
 aktools_log.log
+aktools_log.log.*
 tmp/
