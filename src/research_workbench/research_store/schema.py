@@ -182,6 +182,28 @@ EARNINGS_EXPRESS_SCHEMA: list[ColumnDef] = [
 
 
 # ---------------------------------------------------------------------------
+# Business Segments (主营构成, A-shares via AKShare)
+# ---------------------------------------------------------------------------
+# Multi-year revenue / profit breakdown for SOTP valuation. Long-form: each
+# row is (symbol, fiscal_period, classification, segment). classification is
+# "合计" (top-level), "按产品分类", "按地区分类", etc — eastmoney's own labels.
+BUSINESS_SEGMENT_SCHEMA: list[ColumnDef] = [
+    ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
+    ColumnDef("fiscal_period", "datetime64[ns]", nullable=False, primary_key=True, description="报告期"),
+    ColumnDef("classification", "str", nullable=False, primary_key=True, description="分类维度(按产品 / 按地区 / 合计)"),
+    ColumnDef("segment", "str", nullable=False, primary_key=True, description="分部名称"),
+    ColumnDef("revenue", "float64", description="主营收入"),
+    ColumnDef("revenue_ratio", "float64", description="收入占比(0-1)"),
+    ColumnDef("cost", "float64", description="主营成本"),
+    ColumnDef("cost_ratio", "float64", description="成本占比"),
+    ColumnDef("profit", "float64", description="主营利润"),
+    ColumnDef("profit_ratio", "float64", description="利润占比"),
+    ColumnDef("gross_margin", "float64", description="毛利率"),
+    ColumnDef("data_source", "str", description="数据来源标识"),
+]
+
+
+# ---------------------------------------------------------------------------
 # Capital Flow (主力资金流向, daily snapshot via Longbridge CLI)
 # ---------------------------------------------------------------------------
 # Today's distribution of buy/sell across order size buckets. Units are 万元

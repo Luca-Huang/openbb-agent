@@ -579,6 +579,60 @@ class AKShareCNProvider:
         return df.dropna(subset=["date"]).sort_values("date").reset_index(drop=True)
 
     # ------------------------------------------------------------------
+    # Business segments (主营构成) — SOTP valuation input
+    # ------------------------------------------------------------------
+
+    def fetch_business_segments(self, symbol: str) -> pd.DataFrame:
+        """Fetch the multi-year 主营构成 breakdown (按产品 / 按地区 / 汇总).
+
+        Returns long-form: each row is one (fiscal_period, classification,
+        segment) triple with revenue / cost / profit / margin numbers. Use
+        for SOTP valuation: aggregate revenue / profit per segment, apply
+        per-segment PE multiples.
+        """
+        log.info("AKShare CN: fetching business segments for %s", symbol)
+        code = symbol.split(".", 1)[0]
+        suffix = symbol.split(".", 1)[1].upper() if "." in symbol else ""
+        # stock_zygc_em wants market-prefixed symbol: 'SZ002624' / 'SH600519'
+        prefixed = f"{suffix}{code}" if suffix in ("SZ", "SH", "BJ") else code
+        rows = _retry_get_json(
+            "/api/public/stock_zygc_em",
+            {"symbol": prefixed},
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        rename = {
+            "股票代码": "code",
+            "报告日期": "fiscal_period",
+            "分类类型": "classification",
+            "主营构成": "segment",
+            "主营收入": "revenue",
+            "收入比例": "revenue_ratio",
+            "主营成本": "cost",
+            "成本比例": "cost_ratio",
+            "主营利润": "profit",
+            "利润比例": "profit_ratio",
+            "毛利率": "gross_margin",
+        }
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        df["fiscal_period"] = pd.to_datetime(df["fiscal_period"], errors="coerce")
+        numeric = ("revenue", "revenue_ratio", "cost", "cost_ratio",
+                   "profit", "profit_ratio", "gross_margin")
+        for col in numeric:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        # classification can be NaN for the top-level (合计) rows.
+        if "classification" in df.columns:
+            df["classification"] = df["classification"].fillna("合计")
+        df["symbol"] = symbol.upper()
+        df["data_source"] = "akshare_em"
+        return df.dropna(subset=["fiscal_period"]).sort_values(
+            ["fiscal_period", "classification", "segment"], ascending=[False, True, True]
+        ).reset_index(drop=True)
+
+    # ------------------------------------------------------------------
     # Events: dividends, shareholder changes
     # ------------------------------------------------------------------
 

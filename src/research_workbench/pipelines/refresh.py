@@ -19,6 +19,11 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
+from research_workbench.analysis.equity_thesis import (
+    EquityThesis,
+    build_thesis,
+    render_thesis_markdown,
+)
 from research_workbench.analysis.summary import build_summary_row
 from research_workbench.data_sources.indicators import add_technical_indicators
 from research_workbench.data_sources.longbridge import (
@@ -156,6 +161,7 @@ class CNEnrichment:
     dividends: pd.DataFrame = field(default_factory=pd.DataFrame)
     shareholder_changes: pd.DataFrame = field(default_factory=pd.DataFrame)
     northbound_holdings: pd.DataFrame = field(default_factory=pd.DataFrame)
+    business_segments: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def for_symbol(self, symbol: str) -> dict[str, pd.DataFrame | None]:
         sym = symbol.upper()
@@ -232,6 +238,7 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
     div_frames: list[pd.DataFrame] = []
     chg_frames: list[pd.DataFrame] = []
     north_frames: list[pd.DataFrame] = []
+    seg_frames: list[pd.DataFrame] = []
 
     for _, item in cn.iterrows():
         symbol = str(item["symbol"])
@@ -259,6 +266,7 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
         _try("dividend_history", lambda: akp.fetch_dividend_history(symbol), div_frames)
         _try("shareholder_changes", lambda: akp.fetch_shareholder_changes(symbol), chg_frames)
         _try("northbound_holding", lambda: akp.fetch_northbound_holding(symbol), north_frames)
+        _try("business_segments", lambda: akp.fetch_business_segments(symbol), seg_frames)
 
     def _concat(frames):
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -278,6 +286,7 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
         dividends=_concat(div_frames),
         shareholder_changes=_concat(chg_frames),
         northbound_holdings=_concat(north_frames),
+        business_segments=_concat(seg_frames),
     )
 
 
@@ -356,6 +365,81 @@ def build_all_summaries(
             rows.append(row)
 
     return pd.DataFrame(rows) if rows else pd.DataFrame()
+
+
+# ---------------------------------------------------------------------------
+# Stage 3b: structured 6-step thesis per symbol
+# ---------------------------------------------------------------------------
+
+
+def build_all_theses(
+    watchlist: pd.DataFrame,
+    history: pd.DataFrame,
+    summary: pd.DataFrame,
+    enrichment: CNEnrichment | None,
+    capital_flow_history: pd.DataFrame | None = None,
+) -> list[EquityThesis]:
+    """Build a structured EquityThesis for every watchlist symbol.
+
+    fund_data is read from the per-symbol row in ``summary`` (which already
+    has end_pe / market_cap / dividend_yield etc. merged in by build_all_
+    summaries), avoiding a second round of network calls.
+    """
+    if watchlist.empty:
+        return []
+
+    summary_by_symbol = {}
+    if not summary.empty and "symbol" in summary.columns:
+        for _, row in summary.iterrows():
+            summary_by_symbol[str(row["symbol"])] = row.to_dict()
+
+    theses: list[EquityThesis] = []
+    for _, item in watchlist.iterrows():
+        symbol = str(item["symbol"])
+        fund_data = summary_by_symbol.get(symbol, {})
+
+        kwargs: dict = {}
+        if enrichment is not None:
+            sliced = enrichment.for_symbol(symbol)
+            # Sliced names differ slightly from build_thesis kwargs.
+            kwargs["earnings_express"] = (
+                enrichment.earnings_express[enrichment.earnings_express["symbol"] == symbol.upper()]
+                if not enrichment.earnings_express.empty else None
+            )
+            kwargs["northbound"] = (
+                enrichment.northbound_holdings[enrichment.northbound_holdings["symbol"] == symbol.upper()]
+                if not enrichment.northbound_holdings.empty else None
+            )
+            kwargs["business_segments"] = (
+                enrichment.business_segments[enrichment.business_segments["symbol"] == symbol.upper()]
+                if not enrichment.business_segments.empty else None
+            )
+
+        if capital_flow_history is not None and not capital_flow_history.empty:
+            cf = capital_flow_history[capital_flow_history["symbol"] == symbol.upper()]
+            kwargs["capital_flow"] = cf if not cf.empty else None
+
+        try:
+            thesis = build_thesis(item, history, fund_data, **kwargs)
+            theses.append(thesis)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("  %s: thesis build failed - %s", symbol, exc)
+
+    return theses
+
+
+def save_all_thesis_reports(theses: list[EquityThesis], out_dir) -> int:
+    """Render each thesis to Markdown under ``out_dir/<SYMBOL>.md``. Returns count saved."""
+    from pathlib import Path
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for t in theses:
+        md = render_thesis_markdown(t)
+        path = out_dir / f"{t.symbol.replace('.', '_')}.md"
+        path.write_text(md, encoding="utf-8")
+        written += 1
+    return written
 
 
 # ---------------------------------------------------------------------------

@@ -214,6 +214,11 @@ def save_capital_flow_history(df: pd.DataFrame, settings: AppSettings) -> None:
     df.to_csv(settings.capital_flow_history_path, index=False)
 
 
+def save_business_segments(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.business_segments_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.business_segments_path, index=False)
+
+
 def save_auto_events(df: pd.DataFrame, settings: AppSettings) -> None:
     settings.auto_events_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(settings.auto_events_path, index=False)

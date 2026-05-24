@@ -42,11 +42,14 @@ from research_workbench.outputs.files import (
 from research_workbench.pipelines.refresh import (
     build_all_events,
     build_all_summaries,
+    build_all_theses,
     fetch_all_capital_flow,
     fetch_all_history,
     fetch_cn_enrichment,
     merge_capital_flow_history,
+    save_all_thesis_reports,
 )
+from research_workbench.outputs.files import save_business_segments
 from research_workbench.signal_engine.radar import DEFAULT_RADAR_CONFIG, build_current_signals
 
 logging.basicConfig(
@@ -161,6 +164,11 @@ def main() -> None:
             log.info("Saved %d northbound-holding rows to %s",
                      len(enrichment.northbound_holdings),
                      SETTINGS.northbound_holdings_path.name)
+        if not enrichment.business_segments.empty:
+            save_business_segments(enrichment.business_segments, SETTINGS)
+            log.info("Saved %d business-segment rows to %s",
+                     len(enrichment.business_segments),
+                     SETTINGS.business_segments_path.name)
 
         auto_events = build_all_events(enrichment)
         if not auto_events.empty:
@@ -181,6 +189,14 @@ def main() -> None:
 
     events = load_events(SETTINGS)
     log.info("Events: %d rows (manual + auto)", len(events))
+
+    # Render per-symbol thesis Markdown reports (uses summary, enrichment, capital flow).
+    if not summary.empty:
+        cf_history = load_capital_flow_history(SETTINGS)
+        theses = build_all_theses(watchlist, history, summary, enrichment, cf_history)
+        if theses:
+            n = save_all_thesis_reports(theses, SETTINGS.thesis_reports_dir)
+            log.info("Saved %d thesis reports to %s/", n, SETTINGS.thesis_reports_dir.name)
 
     log.info("Building current signals...")
     signals = build_current_signals(summary, history, watchlist, events, DEFAULT_RADAR_CONFIG)

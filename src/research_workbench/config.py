@@ -35,7 +35,9 @@ class AppSettings:
     earnings_express_path: Path = field(default=Path(""))
     northbound_holdings_path: Path = field(default=Path(""))
     capital_flow_history_path: Path = field(default=Path(""))
+    business_segments_path: Path = field(default=Path(""))
     auto_events_path: Path = field(default=Path(""))
+    thesis_reports_dir: Path = field(default=Path(""))
 
     refresh: RefreshSchedule = field(default_factory=RefreshSchedule)
 
@@ -60,5 +62,7 @@ def default_settings(repo_root: Path) -> AppSettings:
         earnings_express_path=data_dir / "earnings_express.csv",
         northbound_holdings_path=data_dir / "northbound_holdings.csv",
         capital_flow_history_path=data_dir / "capital_flow_history.csv",
+        business_segments_path=data_dir / "business_segments.csv",
         auto_events_path=data_dir / "auto_events.csv",
+        thesis_reports_dir=data_dir / "thesis_reports",
     )
