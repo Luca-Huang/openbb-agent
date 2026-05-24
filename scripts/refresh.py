@@ -28,7 +28,9 @@ from research_workbench.outputs.files import (
     load_history,
     load_summary,
     save_auto_events,
+    save_earnings_express,
     save_financials,
+    save_financials_quarterly,
     save_history,
     save_signals_snapshot,
     save_summary,
@@ -120,13 +122,23 @@ def main() -> None:
         enrichment = fetch_cn_enrichment(watchlist)
         if not enrichment.financials.empty:
             save_financials(enrichment.financials, SETTINGS)
-            log.info("Saved %d financial rows to %s",
+            log.info("Saved %d annual financial rows to %s",
                      len(enrichment.financials), SETTINGS.financials_path.name)
+        if not enrichment.financials_quarterly.empty:
+            save_financials_quarterly(enrichment.financials_quarterly, SETTINGS)
+            log.info("Saved %d all-period financial rows to %s",
+                     len(enrichment.financials_quarterly),
+                     SETTINGS.financials_quarterly_path.name)
         if not enrichment.valuation_history.empty:
             save_valuation_history(enrichment.valuation_history, SETTINGS)
             log.info("Saved %d valuation-history rows to %s",
                      len(enrichment.valuation_history),
                      SETTINGS.valuation_history_path.name)
+        if not enrichment.earnings_express.empty:
+            save_earnings_express(enrichment.earnings_express, SETTINGS)
+            log.info("Saved %d earnings-express rows to %s",
+                     len(enrichment.earnings_express),
+                     SETTINGS.earnings_express_path.name)
 
         auto_events = build_all_events(enrichment)
         if not auto_events.empty:

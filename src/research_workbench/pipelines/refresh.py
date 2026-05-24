@@ -73,11 +73,18 @@ def fetch_all_history(watchlist: pd.DataFrame) -> pd.DataFrame:
 
 @dataclass
 class CNEnrichment:
-    """Concatenated CN deep data, indexable per symbol via :meth:`for_symbol`."""
+    """Concatenated CN deep data, indexable per symbol via :meth:`for_symbol`.
+
+    ``financials`` is annual-only (the input scoring depends on); the
+    ``financials_quarterly`` frame holds every period (Q1/H1/Q3/annual) for
+    cadence analysis and storage. Both come from one Sina fetch per symbol.
+    """
 
     financials: pd.DataFrame = field(default_factory=pd.DataFrame)
+    financials_quarterly: pd.DataFrame = field(default_factory=pd.DataFrame)
     valuation_history: pd.DataFrame = field(default_factory=pd.DataFrame)
     earnings_forecasts: pd.DataFrame = field(default_factory=pd.DataFrame)
+    earnings_express: pd.DataFrame = field(default_factory=pd.DataFrame)
     dividends: pd.DataFrame = field(default_factory=pd.DataFrame)
     shareholder_changes: pd.DataFrame = field(default_factory=pd.DataFrame)
 
@@ -133,19 +140,26 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
     akp = ak_get_provider("CN")
     report_date = _latest_fiscal_year_end()
 
-    # Pull the market-wide preannouncement table once, then slice per symbol.
-    # Calling the per-symbol variant N times re-downloads ~7800 rows N times.
-    log.info("CN enrichment: pre-fetching market preannouncement table")
+    # Pull the market-wide tables once, then slice per symbol. Calling each
+    # per-symbol variant N times would re-download ~7000-11000 rows N times.
+    log.info("CN enrichment: pre-fetching market yjyg + yjbb tables")
     try:
         market_yjyg = akp.fetch_earnings_forecast_market(report_date)
         log.info("  market yjyg: %d rows", len(market_yjyg))
     except Exception as exc:  # noqa: BLE001
         log.warning("  market yjyg fetch failed: %s", exc)
         market_yjyg = pd.DataFrame()
+    try:
+        market_yjbb = akp.fetch_earnings_express_market(report_date)
+        log.info("  market yjbb: %d rows", len(market_yjbb))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("  market yjbb fetch failed: %s", exc)
+        market_yjbb = pd.DataFrame()
 
-    fin_frames: list[pd.DataFrame] = []
+    fin_all_frames: list[pd.DataFrame] = []
     val_frames: list[pd.DataFrame] = []
     fcst_frames: list[pd.DataFrame] = []
+    express_frames: list[pd.DataFrame] = []
     div_frames: list[pd.DataFrame] = []
     chg_frames: list[pd.DataFrame] = []
 
@@ -163,21 +177,33 @@ def fetch_cn_enrichment(watchlist: pd.DataFrame) -> CNEnrichment:
             except Exception as exc:  # noqa: BLE001
                 log.warning("  %s: %s failed - %s", symbol, label, exc)
 
-        _try("financials", lambda: akp.fetch_annual_financials(symbol), fin_frames)
+        # All-period financials (annual subset derived later in one filter).
+        _try("financials_all", lambda: akp.fetch_financials_all(symbol), fin_all_frames)
         _try("valuation_history", lambda: akp.fetch_historical_valuation(symbol), val_frames)
         _try("earnings_forecast",
              lambda: akp.fetch_earnings_preannouncement(symbol, report_date, market_df=market_yjyg),
              fcst_frames)
+        _try("earnings_express",
+             lambda: akp.fetch_earnings_express(symbol, report_date, market_df=market_yjbb),
+             express_frames)
         _try("dividend_history", lambda: akp.fetch_dividend_history(symbol), div_frames)
         _try("shareholder_changes", lambda: akp.fetch_shareholder_changes(symbol), chg_frames)
 
     def _concat(frames):
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
+    fin_all = _concat(fin_all_frames)
+    fin_annual = (
+        fin_all[fin_all["fiscal_period"].dt.month == 12].reset_index(drop=True)
+        if not fin_all.empty
+        else pd.DataFrame()
+    )
     return CNEnrichment(
-        financials=_concat(fin_frames),
+        financials=fin_annual,
+        financials_quarterly=fin_all,
         valuation_history=_concat(val_frames),
         earnings_forecasts=_concat(fcst_frames),
+        earnings_express=_concat(express_frames),
         dividends=_concat(div_frames),
         shareholder_changes=_concat(chg_frames),
     )

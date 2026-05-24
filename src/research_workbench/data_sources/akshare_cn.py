@@ -166,16 +166,15 @@ class AKShareCNProvider:
                 f"got {market!r}"
             )
 
-    def fetch_annual_financials(self, symbol: str) -> pd.DataFrame:
-        """Fetch IS + BS + CF as one annual-frequency DataFrame.
+    def fetch_financials_all(self, symbol: str) -> pd.DataFrame:
+        """Fetch IS + BS + CF for **all** periods (annual + quarterly).
 
-        Rows are filtered to fiscal-year-end (12-31) reports only; quarterly
-        periods are dropped. Statements are outer-merged on ``fiscal_period``,
-        so each row holds all available IS/BS/CF fields for that year. A few
-        derived ratios (net margin, asset-liability ratio, free cash flow)
-        are pre-computed for convenience.
+        Returns rows for every fiscal_period the Sina endpoint exposes,
+        statements outer-merged. Use :meth:`fetch_annual_financials` for the
+        annual-only subset (12-31 rows) when scoring; use the all-periods
+        view for sequential / cadence analysis.
         """
-        log.info("AKShare CN: fetching annual financials for %s", symbol)
+        log.info("AKShare CN: fetching all-period financials for %s", symbol)
         sina_symbol = _akshare_sina_symbol(symbol)
 
         income = _fetch_sina_statement(sina_symbol, "利润表", _INCOME_RENAME)
@@ -191,13 +190,10 @@ class AKShareCNProvider:
             if not other.empty:
                 df = df.merge(other, on="fiscal_period", how="outer")
 
-        # Annual only (fiscal-year-end is 12-31 for CN A-shares).
-        df = df[df["fiscal_period"].dt.month == 12].copy()
         if df.empty:
             return df
 
         # Derived ratios — computed only when both operands are present.
-        # Division by zero yields ±inf; coerce to NaN so callers can skip cleanly.
         def _safe_div(num: pd.Series, den: pd.Series) -> pd.Series:
             return (num / den).replace([np.inf, -np.inf], np.nan)
 
@@ -213,9 +209,23 @@ class AKShareCNProvider:
         df["symbol"] = symbol.upper()
         df["data_source"] = "akshare_sina"
         df["fiscal_year"] = df["fiscal_period"].dt.year.astype("Int64")
+        # Derive report_type from fiscal-period month: 3 -> q1, 6 -> h1,
+        # 9 -> q3 (3-quarter cumulative), 12 -> annual.
+        month_map = {3: "q1", 6: "h1", 9: "q3", 12: "annual"}
+        df["report_type"] = df["fiscal_period"].dt.month.map(month_map).fillna("other")
 
         return df.sort_values("fiscal_period", ascending=False).reset_index(drop=True)
 
+    def fetch_annual_financials(self, symbol: str) -> pd.DataFrame:
+        """Annual-only subset of :meth:`fetch_financials_all` (12-31 rows).
+
+        Kept as the canonical input to ``analysis.summary`` scoring, which
+        depends on year-over-year comparisons across calendar years.
+        """
+        df = self.fetch_financials_all(symbol)
+        if df.empty:
+            return df
+        return df[df["fiscal_period"].dt.month == 12].reset_index(drop=True)
 
     # ------------------------------------------------------------------
     # Historical valuation (PE/PB/PS daily series) — for hist-valuation score
@@ -337,6 +347,97 @@ class AKShareCNProvider:
             return match
         match["symbol"] = symbol.upper()
         match["fiscal_period"] = pd.to_datetime(report_date, format="%Y%m%d", errors="coerce")
+        return match.reset_index(drop=True)
+
+    # ------------------------------------------------------------------
+    # Earnings express (yjbb) — preliminary results before formal report
+    # ------------------------------------------------------------------
+
+    _YJBB_RENAME = {
+        "股票代码": "code",
+        "股票简称": "name",
+        "每股收益": "eps",
+        "营业总收入-营业总收入": "revenue",
+        "营业总收入-同比增长": "revenue_yoy_pct",
+        "营业总收入-季度环比增长": "revenue_qoq_pct",
+        "净利润-净利润": "net_income",
+        "净利润-同比增长": "net_income_yoy_pct",
+        "净利润-季度环比增长": "net_income_qoq_pct",
+        "每股净资产": "bps",
+        "净资产收益率": "roe_pct",
+        "每股经营现金流量": "ocf_per_share",
+        "销售毛利率": "gross_margin_pct",
+        "所处行业": "industry",
+        "最新公告日期": "announce_date",
+    }
+
+    @staticmethod
+    def _normalize_yjbb(df: pd.DataFrame) -> pd.DataFrame:
+        rename = AKShareCNProvider._YJBB_RENAME
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        numeric_cols = (
+            "eps", "revenue", "revenue_yoy_pct", "revenue_qoq_pct",
+            "net_income", "net_income_yoy_pct", "net_income_qoq_pct",
+            "bps", "roe_pct", "ocf_per_share", "gross_margin_pct",
+        )
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        if "announce_date" in df.columns:
+            df["announce_date"] = pd.to_datetime(df["announce_date"], errors="coerce")
+        if "code" in df.columns:
+            def _suffix(code: str) -> str:
+                code = str(code)
+                if code.startswith(("0", "2", "3")):
+                    return f"{code}.SZ"
+                if code.startswith(("5", "6", "9")):
+                    return f"{code}.SH"
+                if code.startswith("8"):
+                    return f"{code}.BJ"
+                return code
+            df["symbol"] = df["code"].map(_suffix)
+        return df
+
+    def fetch_earnings_express_market(self, report_date: str) -> pd.DataFrame:
+        """Fetch the FULL market 业绩快报 table for ``report_date``.
+
+        Each row is one stock's preliminary results for that fiscal period
+        (typically released 1-4 weeks before the formal annual / quarterly
+        report). ``report_date`` like ``20251231``. Use this once per refresh
+        and filter per symbol with :meth:`fetch_earnings_express`.
+        """
+        log.info("AKShare CN: fetching market yjbb table @ %s", report_date)
+        rows = _retry_get_json(
+            "/api/public/stock_yjbb_em",
+            {"date": report_date},
+            timeout_seconds=BULK_HTTP_TIMEOUT_SECONDS,
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = self._normalize_yjbb(pd.DataFrame(rows))
+        df["fiscal_period"] = pd.to_datetime(report_date, format="%Y%m%d", errors="coerce")
+        return df.reset_index(drop=True)
+
+    def fetch_earnings_express(
+        self,
+        symbol: str,
+        report_date: str,
+        market_df: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """Slice the market 业绩快报 table down to a single ``symbol``.
+
+        Same batch-vs-ad-hoc tradeoff as :meth:`fetch_earnings_preannouncement`.
+        """
+        if market_df is None:
+            market_df = self.fetch_earnings_express_market(report_date)
+        if market_df.empty or "code" not in market_df.columns:
+            return pd.DataFrame()
+        code = symbol.split(".", 1)[0]
+        match = market_df[market_df["code"].astype(str) == code].copy()
+        if match.empty:
+            return match
+        match["symbol"] = symbol.upper()
         return match.reset_index(drop=True)
 
     # ------------------------------------------------------------------

@@ -178,9 +178,19 @@ def save_financials(df: pd.DataFrame, settings: AppSettings) -> None:
     df.to_csv(settings.financials_path, index=False)
 
 
+def save_financials_quarterly(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.financials_quarterly_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.financials_quarterly_path, index=False)
+
+
 def save_valuation_history(df: pd.DataFrame, settings: AppSettings) -> None:
     settings.valuation_history_path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(settings.valuation_history_path, index=False)
+
+
+def save_earnings_express(df: pd.DataFrame, settings: AppSettings) -> None:
+    settings.earnings_express_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(settings.earnings_express_path, index=False)
 
 
 def save_auto_events(df: pd.DataFrame, settings: AppSettings) -> None:

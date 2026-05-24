@@ -118,8 +118,9 @@ SIGNAL_SCHEMA: list[ColumnDef] = [
 # decimals (e.g. 0.10 = 10%).
 FINANCIAL_SCHEMA: list[ColumnDef] = [
     ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
-    ColumnDef("fiscal_period", "datetime64[ns]", nullable=False, primary_key=True, description="财报报告期(年度)"),
+    ColumnDef("fiscal_period", "datetime64[ns]", nullable=False, primary_key=True, description="财报报告期"),
     ColumnDef("fiscal_year", "Int64", description="财年(冗余,等于 fiscal_period.year)"),
+    ColumnDef("report_type", "str", description="annual / q1 / h1 / q3 — 由 fiscal_period 月份派生"),
     # 利润表
     ColumnDef("revenue", "float64", description="营业总收入"),
     ColumnDef("revenue_main", "float64", description="营业收入(主营)"),
@@ -151,6 +152,32 @@ FINANCIAL_SCHEMA: list[ColumnDef] = [
     ColumnDef("free_cash_flow", "float64", description="自由现金流 ≈ OCF - capex"),
     ColumnDef("roe_simple", "float64", description="净资产收益率(简化) = net_income_parent / equity_parent"),
     ColumnDef("data_source", "str", description="数据来源标识(akshare_sina 等)"),
+]
+
+
+# ---------------------------------------------------------------------------
+# Earnings Express (业绩快报 — preliminary results, A-shares via AKShare)
+# ---------------------------------------------------------------------------
+# Preliminary report released 1-4 weeks ahead of the formal annual/quarterly
+# filing. Same fields as FINANCIAL_SCHEMA where they overlap but pre-computed
+# YoY/QoQ growth + industry classification baked in.
+EARNINGS_EXPRESS_SCHEMA: list[ColumnDef] = [
+    ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
+    ColumnDef("fiscal_period", "datetime64[ns]", nullable=False, primary_key=True, description="报告期"),
+    ColumnDef("name", "str", description="股票简称"),
+    ColumnDef("industry", "str", description="所处行业(eastmoney 分类)"),
+    ColumnDef("eps", "float64", description="每股收益"),
+    ColumnDef("bps", "float64", description="每股净资产"),
+    ColumnDef("revenue", "float64", description="营业总收入"),
+    ColumnDef("revenue_yoy_pct", "float64", description="营业总收入同比增长(百分比)"),
+    ColumnDef("revenue_qoq_pct", "float64", description="营业总收入季度环比增长"),
+    ColumnDef("net_income", "float64", description="净利润"),
+    ColumnDef("net_income_yoy_pct", "float64", description="净利润同比增长(百分比)"),
+    ColumnDef("net_income_qoq_pct", "float64", description="净利润季度环比增长"),
+    ColumnDef("roe_pct", "float64", description="净资产收益率(百分比)"),
+    ColumnDef("ocf_per_share", "float64", description="每股经营现金流量"),
+    ColumnDef("gross_margin_pct", "float64", description="销售毛利率(百分比)"),
+    ColumnDef("announce_date", "datetime64[ns]", description="最新公告日期"),
 ]
 
 
