@@ -9,3 +9,7 @@ research_inputs/holdings.json
 outputs/holdings_snapshots/
 .claude/
 .env
+
+# Service logs and scratch directories
+aktools_log.log
+tmp/

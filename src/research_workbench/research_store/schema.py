@@ -110,6 +110,51 @@ SIGNAL_SCHEMA: list[ColumnDef] = [
 ]
 
 # ---------------------------------------------------------------------------
+# Annual Financial Statements (CN A-shares via AKShare/AKTools)
+# ---------------------------------------------------------------------------
+# Columns mirror what AKShareCNProvider.fetch_annual_financials() returns.
+# Primary key is (symbol, fiscal_period). All monetary fields are in the
+# issuer's reporting currency (CNY for A-shares); ratios are dimensionless
+# decimals (e.g. 0.10 = 10%).
+FINANCIAL_SCHEMA: list[ColumnDef] = [
+    ColumnDef("symbol", "str", nullable=False, primary_key=True, description="股票代码"),
+    ColumnDef("fiscal_period", "datetime64[ns]", nullable=False, primary_key=True, description="财报报告期(年度)"),
+    ColumnDef("fiscal_year", "Int64", description="财年(冗余,等于 fiscal_period.year)"),
+    # 利润表
+    ColumnDef("revenue", "float64", description="营业总收入"),
+    ColumnDef("revenue_main", "float64", description="营业收入(主营)"),
+    ColumnDef("operating_cost", "float64", description="营业成本"),
+    ColumnDef("operating_profit", "float64", description="营业利润"),
+    ColumnDef("total_profit", "float64", description="利润总额"),
+    ColumnDef("net_income", "float64", description="净利润(含少数股东损益)"),
+    ColumnDef("net_income_parent", "float64", description="归属于母公司所有者的净利润(归母净利)"),
+    ColumnDef("basic_eps", "float64", description="基本每股收益"),
+    ColumnDef("diluted_eps", "float64", description="稀释每股收益"),
+    # 资产负债表
+    ColumnDef("total_assets", "float64", description="资产总计"),
+    ColumnDef("total_liabilities", "float64", description="负债合计"),
+    ColumnDef("equity_parent", "float64", description="归属于母公司股东权益合计"),
+    ColumnDef("total_equity", "float64", description="所有者权益合计(含少数股东权益)"),
+    ColumnDef("cash_and_equivalents", "float64", description="货币资金"),
+    ColumnDef("short_term_debt", "float64", description="短期借款"),
+    ColumnDef("long_term_debt", "float64", description="长期借款"),
+    ColumnDef("bonds_payable", "float64", description="应付债券"),
+    ColumnDef("inventory", "float64", description="存货"),
+    # 现金流量表
+    ColumnDef("operating_cash_flow_net", "float64", description="经营活动产生的现金流量净额"),
+    ColumnDef("investing_cash_flow_net", "float64", description="投资活动产生的现金流量净额"),
+    ColumnDef("financing_cash_flow_net", "float64", description="筹资活动产生的现金流量净额"),
+    ColumnDef("capex", "float64", description="资本开支(购建固定/无形/长期资产支付的现金)"),
+    # 派生比率
+    ColumnDef("net_margin", "float64", description="净利率 = net_income_parent / revenue"),
+    ColumnDef("asset_liability_ratio", "float64", description="资产负债率 = total_liabilities / total_assets"),
+    ColumnDef("free_cash_flow", "float64", description="自由现金流 ≈ OCF - capex"),
+    ColumnDef("roe_simple", "float64", description="净资产收益率(简化) = net_income_parent / equity_parent"),
+    ColumnDef("data_source", "str", description="数据来源标识(akshare_sina 等)"),
+]
+
+
+# ---------------------------------------------------------------------------
 # Company Events
 # ---------------------------------------------------------------------------
 EVENT_SCHEMA: list[ColumnDef] = [
