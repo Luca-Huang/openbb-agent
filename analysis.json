@@ -1,15 +1,15 @@
 {
-  "today": "2026-05-22",
+  "today": "2026-05-25",
   "holdings": [
     {
       "code": "002602",
       "name": "世纪华通",
       "last_date": "2026-05-13",
-      "today_action": "减仓 25%",
-      "today_priority": 2,
-      "today_note": "跌破移动止损 16.57",
-      "yesterday_action": "减仓 25%",
-      "yesterday_note": "跌破移动止损 16.55",
+      "today_action": "持有观察",
+      "today_priority": 4,
+      "today_note": "结构中性，等待方向",
+      "yesterday_action": "持有观察",
+      "yesterday_note": "结构中性，等待方向",
       "last_close": 15.06999969482422,
       "floating_pnl_pct": 0.019621088959690218,
       "trigger": "",

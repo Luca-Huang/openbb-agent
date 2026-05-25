@@ -3,7 +3,7 @@ from datetime import date
 from pathlib import Path
 sys.path.insert(0, "src")
 from research_workbench.config import default_settings
-from research_workbench.research_store.files import load_history
+from research_workbench.outputs.files import load_history
 from research_workbench.signal_engine.holdings_tracker import analyze_holding, load_holdings
 from research_workbench.signal_engine.radar import add_radar_features
 
