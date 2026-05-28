@@ -1,0 +1,19 @@
+# 价值投资博主文章库
+# 格式：一行一个 URL，# 开头为注释
+# 用途：blogger-distill skill 的输入源
+
+# === 第一批（2026-05-25 提供）===
+https://mp.weixin.qq.com/s/2w5q5OTsLg8fs7sQqpMrgA
+https://mp.weixin.qq.com/s/G5EHIN_HxYnUi72t-SfyUQ
+https://mp.weixin.qq.com/s/XTw97khHxQXqVyFauvb2Hg
+https://mp.weixin.qq.com/s/0h_TWEqNRTnRaONzDYKAGw
+https://mp.weixin.qq.com/s/FGX3TAoBbK7AAuRf-DjrJA
+
+# === 第二批（2026-05-25 追加）===
+https://mp.weixin.qq.com/s/7gf7YCzYHy3VXCj2bd3xtw
+https://mp.weixin.qq.com/s/4Rhb_XCvZH8p0yT2kY1KCA
+https://mp.weixin.qq.com/s/NaBH0Mzb6JjxfeoBEkQHGg
+https://mp.weixin.qq.com/s/lIjRw0e2pkCIj1c117PCqQ
+https://mp.weixin.qq.com/s/9O3plpZTtU7F-4Xfyvgbbg
+https://mp.weixin.qq.com/s/-T7_yhiaBdI39tuc2Y5hfg
+https://mp.weixin.qq.com/s/ihhwWSbeNGL4qfqXK8B_Cg
