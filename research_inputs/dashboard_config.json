@@ -182,51 +182,57 @@
       ]
     },
     "9999.HK": {
-      "_match_order_note": "'创新业务' MUST come before '云音乐' — the innovation segment name literally contains '云音乐' as exclusion clause ('不包括云音乐'), so first-match-wins requires careful ordering.",
+      "_match_order_note": "'创新业务' MUST come before '云音乐' — innovation segment name contains '云音乐' as exclusion clause.",
+      "_calibration_note": "PS bumped to align with street consensus (+29%) — AI gaming + 出海 premium beyond historical PE.",
       "segment_currency": "CNY",
       "segments": [
-        {"match": ["游戏"], "label": "游戏及增值服务", "ps": 4.0, "reason": "净利率~30%×PE13 — 自研管线强、行业最高利润率，长线运营+出海"},
-        {"match": ["创新业务"], "label": "创新业务及其他", "ps": 1.0, "reason": "杂项，保守给1×"},
-        {"match": ["云音乐"], "label": "网易云音乐", "ps": 2.5, "reason": "Spotify-ish成长不盈利，按对标音乐流媒体给中位PS"},
-        {"match": ["有道"], "label": "有道", "ps": 1.5, "reason": "教育+AI翻译，薄利但成长"}
+        {"match": ["游戏"], "label": "游戏及增值服务", "ps": 6.5, "reason": "净利率~30%×PE22 — franchise耐久+AI游戏+出海期权全计入"},
+        {"match": ["创新业务"], "label": "创新业务及其他", "ps": 1.5, "reason": "杂项小幅成长溢价"},
+        {"match": ["云音乐"], "label": "网易云音乐", "ps": 3.5, "reason": "对标Spotify+独家版权壁垒"},
+        {"match": ["有道"], "label": "有道", "ps": 2.0, "reason": "AI翻译+教育成长"}
       ]
     },
     "1024.HK": {
+      "_calibration_note": "PS bumped 2x — 直播电商货币化加速 + 经营利润转正 + 海外减亏期权。",
       "segment_currency": "CNY",
       "segments": [
-        {"match": ["国内"], "label": "国内业务", "ps": 0.8, "reason": "经营利润刚转正，按GMV/利润切换定价，给薄利PS"},
-        {"match": ["海外"], "label": "海外(Kwai)", "ps": 1.0, "reason": "亏损中，按成长期权给小PS — 巴西墨西哥渗透是变量"}
+        {"match": ["国内"], "label": "国内业务", "ps": 1.5, "reason": "净利率~10%×PE15 — 经营利润扩张+电商货币化率提升"},
+        {"match": ["海外"], "label": "海外(Kwai)", "ps": 2.0, "reason": "巴西+墨西哥+东南亚成长期权，按高增长亏损股给"}
       ]
     },
     "META.US": {
+      "_calibration_note": "App PS bumped to reflect AI广告ROI溢价。RL stays PS=0 per user decision.",
       "segment_currency": "USD",
       "segments": [
-        {"match": ["App"], "label": "Family of Apps (FB/IG/WhatsApp)", "ps": 9.0, "reason": "净利率~40%×PE25 — 广告寡头定价权，AI驱动ROI提升"},
-        {"match": ["虚拟现实", "Reality Labs"], "label": "Reality Labs (RL)", "ps": 0.0, "reason": "市场实际给负价或归零 — 持续巨亏+营收微小，按归零保守处理(用户决定)"}
+        {"match": ["App"], "label": "Family of Apps (FB/IG/WhatsApp)", "ps": 11.0, "reason": "净利率~40%×PE28 — Llama开源+AI广告ROI+回购全溢价"},
+        {"match": ["虚拟现实", "Reality Labs"], "label": "Reality Labs (RL)", "ps": 0.0, "reason": "归零处理（用户决定）— 巨亏，市场给负价"}
       ]
     },
     "GOOGL.US": {
+      "_calibration_note": "Services PS 6.5→11, Cloud 8→12 — AI 龙头溢价计入，TPU 自研成本优势+全栈 AI。",
       "segment_currency": "USD",
       "segments": [
-        {"match": ["Google 服务", "服务"], "label": "Google服务(搜索+YouTube+Android)", "ps": 6.5, "reason": "净利率~30%×PE22 — AI对搜索的颠覆折扣已计入"},
-        {"match": ["Cloud", "云"], "label": "Google Cloud", "ps": 8.0, "reason": "对标AWS PS~8-10，刚转盈给中位"},
-        {"match": ["其他"], "label": "Other Bets(Waymo等)", "ps": 1.0, "reason": "实验性业务+亏损，给保守PS"}
+        {"match": ["Google 服务", "服务"], "label": "Google服务(搜索+YouTube+Android)", "ps": 11.0, "reason": "净利率~30%×PE35 — AI Overviews 重塑搜索+YouTube广告增量"},
+        {"match": ["Cloud", "云"], "label": "Google Cloud", "ps": 12.0, "reason": "TPU 成本优势+Gemini 全栈，对 AWS 溢价"},
+        {"match": ["其他"], "label": "Other Bets(Waymo等)", "ps": 1.0, "reason": "Waymo Robotaxi 期权未计入主线"}
       ]
     },
     "AMZN.US": {
+      "_calibration_note": "AWS PS 6→9, 北美 1.5→2.5 — AI 云溢价 + 广告高利润业务藏在北美段里抬升综合 PS。",
       "segment_currency": "USD",
       "segments": [
-        {"match": ["北美"], "label": "北美零售+广告", "ps": 1.5, "reason": "零售薄利+广告高利润混合 — 广告~$570亿藏在这里(对应PS~7)，抬升综合PS"},
-        {"match": ["国际"], "label": "国际零售", "ps": 1.2, "reason": "以零售为主，广告占比小，纯薄利"},
-        {"match": ["AWS"], "label": "AWS", "ps": 6.0, "reason": "净利率~28%×PE22 — 云加速但面对Azure/GCP竞争"}
+        {"match": ["北美"], "label": "北美零售+广告", "ps": 2.5, "reason": "广告~$570亿(PS~8)藏在这里 + 零售利润率改善 → 综合PS抬升"},
+        {"match": ["国际"], "label": "国际零售", "ps": 1.8, "reason": "国际利润率改善+广告渗透+物流杠杆"},
+        {"match": ["AWS"], "label": "AWS", "ps": 9.0, "reason": "净利率~28%×PE32 — AI 云加速+Anthropic 合作，对 Azure 不让步"}
       ]
     },
     "MSFT.US": {
+      "_calibration_note": "PS 全面上调 — Copilot 全栈变现 + Azure 引领 + OpenAI 护城河。",
       "segment_currency": "USD",
       "segments": [
-        {"match": ["生产力"], "label": "生产力及商业应用(Office+LinkedIn)", "ps": 12.0, "reason": "净利率~45%×PE28 — 高粘性订阅+Copilot AI溢价"},
-        {"match": ["智能云"], "label": "智能云(Azure为主)", "ps": 11.0, "reason": "净利率~40%×PE28 — AI云增长龙头，OpenAI合作护城河"},
-        {"match": ["个人运算"], "label": "个人运算(Windows+Xbox+设备)", "ps": 4.0, "reason": "净利率~25%×PE16 — 成熟低增长"}
+        {"match": ["生产力"], "label": "生产力及商业应用(Office+LinkedIn)", "ps": 15.0, "reason": "净利率~45%×PE33 — Copilot 全栈 AI 变现 + LinkedIn 寡头"},
+        {"match": ["智能云"], "label": "智能云(Azure为主)", "ps": 14.0, "reason": "净利率~40%×PE35 — AI 云增长龙头+OpenAI 独占合作"},
+        {"match": ["个人运算"], "label": "个人运算(Windows+Xbox+设备)", "ps": 5.0, "reason": "净利率~25%×PE20 — Activision 整合+游戏现金流"}
       ]
     },
     "002624.SZ": {
