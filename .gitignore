@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 outputs/research_data/
+outputs/*.html
+outputs/.launchd_logs/
 logs/streamlit.*.log
 
 # Personal trade history — never commit
