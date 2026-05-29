@@ -147,6 +147,31 @@ def _fx(rate_map: dict[str, float], from_ccy: str, to_ccy: str) -> float:
     return float(rate)
 
 
+def _sotp_rows_from_manual(manual_segments: list[dict]) -> tuple[list[dict], float]:
+    """Build SOTP rows from user-authored 'profit × PE' segments.
+
+    Use this path when Longbridge has no segment data for a stock (most A-shares)
+    or when you want a forward-looking thesis (e.g. estimated profit from an
+    unreleased product). Each manual segment supplies its own profit + PE; the
+    'PS' column in the rendered table is left blank since there is no revenue.
+    """
+    rows: list[dict] = []
+    total = 0.0
+    for ms in manual_segments:
+        profit_yi = float(ms.get("profit_yi", 0))
+        pe = float(ms.get("pe", 0))
+        val_yi = profit_yi * pe
+        total += val_yi * 1e8
+        rows.append({
+            "label": str(ms.get("label", "未命名")),
+            "rev_yi": None,  # manual is profit-driven, no revenue column
+            "ps": None,      # no PS — show 利润×PE in reason tooltip instead
+            "val_yi": val_yi,
+            "reason": f"利润{profit_yi:.1f}亿×PE{pe:.0f} — {ms.get('reason','')}",
+        })
+    return rows, total
+
+
 def build_sotp(
     symbol: str,
     cfg: dict,
@@ -155,43 +180,60 @@ def build_sotp(
     mktcap_ccy: str,
     fx_rates: dict[str, float],
 ) -> dict | None:
-    """Compute SOTP target & implied upside vs market cap. Returns None when not configured."""
+    """Compute SOTP target & implied upside vs market cap. Returns None when not configured.
+
+    Supports two configuration shapes for `cfg["segments"][symbol]`:
+
+    1. Auto (revenue × PS): config has `segments` list; each item matches a
+       Longbridge `business-segments` row by keyword and multiplies revenue by PS.
+       Falls back gracefully if Longbridge returns nothing.
+
+    2. Manual (profit × PE): config has `manual_segments` list; profit & PE come
+       straight from the JSON. No Longbridge call. Use for A-shares without
+       segment data, or for forward-looking thesis valuations.
+
+    `extra` lines (non-revenue value like net cash / investment NAV) work for both.
+    """
     sotp_cfg = cfg.get("segments", {}).get(symbol)
     if not sotp_cfg:
         return None
     seg_ccy = sotp_cfg.get("segment_currency", "CNY")
-    payload = _safe(
-        f"business-segments[{symbol}]",
-        lambda: provider.fetch_business_segments(symbol, history=True, report="af"),
-        {},
-    ) or {}
     rows: list[dict] = []
-    total_seg_ccy = 0.0
-    for name, rev in _annual_segments(payload):
-        match = _match_seg(name, sotp_cfg["segments"])
-        if not match:
-            continue  # skip 抵消/未分摊
-        val = rev * match["ps"]
-        total_seg_ccy += val
-        rows.append({
-            "label": match["label"],
-            "rev_yi": rev / 1e8,
-            "ps": match["ps"],
-            "val_yi": val / 1e8,
-            "reason": match["reason"],
-        })
+    total_seg_value = 0.0  # raw value in segment_currency
+
+    if "manual_segments" in sotp_cfg:
+        rows, total_seg_value = _sotp_rows_from_manual(sotp_cfg["manual_segments"])
+    elif "segments" in sotp_cfg:
+        payload = _safe(
+            f"business-segments[{symbol}]",
+            lambda: provider.fetch_business_segments(symbol, history=True, report="af"),
+            {},
+        ) or {}
+        for name, rev in _annual_segments(payload):
+            match = _match_seg(name, sotp_cfg["segments"])
+            if not match:
+                continue  # skip 抵消/未分摊
+            val = rev * match["ps"]
+            total_seg_value += val
+            rows.append({
+                "label": match["label"],
+                "rev_yi": rev / 1e8,
+                "ps": match["ps"],
+                "val_yi": val / 1e8,
+                "reason": match["reason"],
+            })
     if not rows:
         return None
 
     for ex in sotp_cfg.get("extra", []):
         val_yi = float(ex["value_yi"])
-        total_seg_ccy += val_yi * 1e8
+        total_seg_value += val_yi * 1e8
         rows.append({
             "label": ex["label"], "rev_yi": None, "ps": None,
             "val_yi": val_yi, "reason": ex["reason"],
         })
 
-    target_seg_yi = total_seg_ccy / 1e8
+    target_seg_yi = total_seg_value / 1e8
     fx = _fx(fx_rates, seg_ccy, mktcap_ccy)
     target_mc_yi = target_seg_yi * fx
     mktcap_yi = mktcap / 1e8 if isinstance(mktcap, (int, float)) and pd.notna(mktcap) else None
@@ -206,6 +248,7 @@ def build_sotp(
         "seg_ccy": seg_ccy,
         "mc_ccy": mktcap_ccy,
         "fx": fx,
+        "mode": "manual" if "manual_segments" in sotp_cfg else "auto",
     }
 
 
@@ -368,9 +411,10 @@ def _sotp(a: dict) -> str:
         badge, bar = "", ""
     fx_note = (f"段{s['seg_ccy']}×{s['fx']:.3f}→{s['mc_ccy']}" if s.get("seg_ccy") != s.get("mc_ccy")
                else f"同币种 {s['seg_ccy']}")
+    mode = "手填利润×PE" if s.get("mode") == "manual" else "营收×PS"
     return (
         '<section class="sotp"><div class="sh">分部估值 (SOTP) '
-        f'<span class="sh-x">营收×PS · {fx_note} · vs 现价市值</span></div>'
+        f'<span class="sh-x">{mode} · {fx_note} · vs 现价市值</span></div>'
         f'<table class="st"><tbody>{"".join(body)}</tbody></table>'
         f'<div class="sf"><span>目标 <b>{_wan(tgt)}</b> · 现价 {_wan(mc)}</span>{badge}</div>{bar}</section>'
     )

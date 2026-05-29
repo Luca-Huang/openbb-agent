@@ -211,6 +211,35 @@ class TestBuildSotp(unittest.TestCase):
         }
         self.assertIsNone(build_sotp("TEST.HK", cfg, provider, 1e10, "HKD", {}))
 
+    def test_manual_segments_uses_profit_times_pe(self):
+        """A-share path: profit × PE, no Longbridge fetch."""
+        class _NeverCalledProvider:
+            def fetch_business_segments(self, *a, **kw):
+                raise AssertionError("manual path must not hit Longbridge")
+        cfg = {
+            "segments": {"002624.SZ": {
+                "segment_currency": "CNY",
+                "manual_segments": [
+                    {"label": "老游戏", "profit_yi": 7.5, "pe": 15, "reason": "现金牛"},
+                    {"label": "新游戏(异环)", "profit_yi": 25, "pe": 15, "reason": "新品"},
+                    {"label": "影视", "profit_yi": 0, "pe": 0, "reason": "归零"},
+                ],
+            }},
+            "fx_rates": {},
+        }
+        out = build_sotp("002624.SZ", cfg, _NeverCalledProvider(),
+                          mktcap=200e8, mktcap_ccy="CNY", fx_rates={})
+        self.assertIsNotNone(out)
+        self.assertEqual(out["mode"], "manual")
+        self.assertEqual(len(out["rows"]), 3)
+        # 7.5×15 + 25×15 + 0×0 = 112.5 + 375 + 0 = 487.5亿
+        self.assertAlmostEqual(out["target_yi"], 487.5)
+        # rev_yi None (no revenue column), ps None (manual = profit*PE not revenue*PS)
+        self.assertIsNone(out["rows"][0]["rev_yi"])
+        self.assertIsNone(out["rows"][0]["ps"])
+        # zero-valued segment still rendered (transparent discard, same as PS=0 auto)
+        self.assertEqual(out["rows"][2]["val_yi"], 0)
+
     def test_ps_zero_is_explicit_discard_not_missing(self):
         # PS=0 means "market gives this segment no value" — must show in rows
         # with val_yi=0 so the user sees the discard rather than silent drop.

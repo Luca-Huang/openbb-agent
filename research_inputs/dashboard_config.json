@@ -228,6 +228,15 @@
         {"match": ["智能云"], "label": "智能云(Azure为主)", "ps": 11.0, "reason": "净利率~40%×PE28 — AI云增长龙头，OpenAI合作护城河"},
         {"match": ["个人运算"], "label": "个人运算(Windows+Xbox+设备)", "ps": 4.0, "reason": "净利率~25%×PE16 — 成熟低增长"}
       ]
+    },
+    "002624.SZ": {
+      "_note": "Longbridge 不提供 A 股分部数据。用 manual_segments：每段手填前瞻利润+PE。数据源自 watchlist_cn.json/thesis.manual_segments。",
+      "segment_currency": "CNY",
+      "manual_segments": [
+        {"label": "老游戏(诛仙等 MMO)", "profit_yi": 7.5, "pe": 15, "reason": "时代眼泪，7-8亿利润已是乐观水平"},
+        {"label": "新游戏(异环)", "profit_yi": 25, "pe": 15, "reason": "异环预期 50 亿流水 × ~50% 净利率"},
+        {"label": "影视业务", "profit_yi": 0, "pe": 0, "reason": "活人微死，不亏即可"}
+      ]
     }
   }
 }
