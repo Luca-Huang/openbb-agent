@@ -73,6 +73,24 @@ class TestSegmentMatching(unittest.TestCase):
         segs = [{"match": ["游戏"], "label": "游戏", "ps": 5.0, "reason": "x"}]
         self.assertIsNone(_match_seg("分部间抵消", segs))
 
+    def test_first_match_wins_so_order_matters_for_exclusion_clauses(self):
+        # 网易 has "创新业务及其他 (不包括云音乐)" — this name contains "云音乐",
+        # so a "云音乐" config placed before "创新业务" would wrongly steal the row.
+        innovation_first = [
+            {"match": ["创新业务"], "label": "创新", "ps": 1.0, "reason": "x"},
+            {"match": ["云音乐"], "label": "云音乐", "ps": 2.5, "reason": "y"},
+        ]
+        self.assertEqual(
+            _match_seg("创新业务及其他 (不包括云音乐)", innovation_first)["label"],
+            "创新",
+        )
+        # Same segments, wrong order: 云音乐 steals it. Documents the trap.
+        wrong_order = list(reversed(innovation_first))
+        self.assertEqual(
+            _match_seg("创新业务及其他 (不包括云音乐)", wrong_order)["label"],
+            "云音乐",
+        )
+
 
 class TestFx(unittest.TestCase):
     def test_same_currency_is_identity(self):
@@ -192,6 +210,31 @@ class TestBuildSotp(unittest.TestCase):
             "fx_rates": {},
         }
         self.assertIsNone(build_sotp("TEST.HK", cfg, provider, 1e10, "HKD", {}))
+
+    def test_ps_zero_is_explicit_discard_not_missing(self):
+        # PS=0 means "market gives this segment no value" — must show in rows
+        # with val_yi=0 so the user sees the discard rather than silent drop.
+        provider = self._FakeProvider([
+            {"name": "App", "value": "100000000000"},
+            {"name": "Reality Labs", "value": "5000000000"},
+        ])
+        cfg = {
+            "segments": {"META.US": {
+                "segment_currency": "USD",
+                "segments": [
+                    {"match": ["App"], "label": "App", "ps": 9.0, "reason": "ads"},
+                    {"match": ["Reality Labs"], "label": "RL", "ps": 0.0, "reason": "discarded"},
+                ],
+            }},
+            "fx_rates": {},
+        }
+        out = build_sotp("META.US", cfg, provider, mktcap=900e8, mktcap_ccy="USD", fx_rates={})
+        self.assertEqual(len(out["rows"]), 2)
+        rl = next(r for r in out["rows"] if r["label"] == "RL")
+        self.assertEqual(rl["ps"], 0.0)
+        self.assertEqual(rl["val_yi"], 0.0)
+        # 100亿 × 9 = 900亿 USD — RL contributes nothing
+        self.assertAlmostEqual(out["target_yi"], 9000.0)
 
 
 class TestLoadConfig(unittest.TestCase):

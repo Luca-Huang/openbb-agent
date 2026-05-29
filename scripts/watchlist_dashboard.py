@@ -345,7 +345,8 @@ def _sotp(a: dict) -> str:
     for r in s["rows"]:
         tip = escape(r.get("reason") or "")
         rev = f'{r["rev_yi"]:.0f}亿' if r.get("rev_yi") else "—"
-        ps = f'×{r["ps"]:.1f}' if r.get("ps") else "—"
+        # `is not None` instead of truthy so PS=0 (explicit "discarded") renders as ×0.0
+        ps = f'×{r["ps"]:.1f}' if r.get("ps") is not None else "—"
         share = f'{r["share"]:.0f}%' if r.get("share") is not None else ""
         body.append(
             f'<tr title="{tip}"><td class="sl">{escape(r["label"])}</td>'
