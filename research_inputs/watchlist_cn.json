@@ -7,7 +7,49 @@
     "status": "watch",
     "target_zone_low": null,
     "target_zone_high": null,
-    "notes": "示例自选股。后续请替换为你的 A 股重点跟踪列表。"
+    "notes": "示例自选股。后续请替换为你的 A 股重点跟踪列表。",
+    "thesis": {
+      "catalyst_type": "product_launch",
+      "catalyst_date": "2026-04-23",
+      "catalyst_summary": "新游戏《异环》正式上线",
+      "peer_bucket": "50亿俱乐部",
+      "peer_success": ["原神", "绝区零", "崩坏铁道", "火影忍者"],
+      "peer_failure": ["王者荣耀世界(同标签下失败案例)"],
+      "quality_factors": [
+        {
+          "description": "内容扎实/团队向心力强,大世界填充度高",
+          "evidence": "苏州团队效率,横向对比王者荣耀世界",
+          "direction": 1
+        },
+        {
+          "description": "大世界天然拉 DAU + 降付费深度",
+          "evidence": "GTA 风格 + 都市单元轻喜剧定位",
+          "direction": 1
+        }
+      ],
+      "manual_segments": [
+        {
+          "name": "老游戏(诛仙等 MMO)",
+          "profit": 750000000,
+          "pe_multiple": 15,
+          "note": "时代眼泪,7-8亿利润已是乐观水平"
+        },
+        {
+          "name": "新游戏(异环)",
+          "profit": 2500000000,
+          "pe_multiple": 15,
+          "note": "异环预期 50 亿流水 × ~50% 净利率"
+        },
+        {
+          "name": "影视业务",
+          "profit": 0,
+          "pe_multiple": 0,
+          "note": "活人微死,不亏即可"
+        }
+      ],
+      "action": "accumulate",
+      "thesis_notes": "短期博弈窗口:开盘暴跌即量化做空,补仓;盘中等待 Taptap 舆情持平。"
+    }
   },
   {
     "symbol": "002241.SZ",

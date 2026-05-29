@@ -57,6 +57,7 @@ def load_watchlist(
                 "target_zone_low": pd.to_numeric(item.get("target_zone_low"), errors="coerce"),
                 "target_zone_high": pd.to_numeric(item.get("target_zone_high"), errors="coerce"),
                 "notes": item.get("notes", ""),
+                "thesis": item.get("thesis"),
             }
         )
     return pd.DataFrame(normalized)
