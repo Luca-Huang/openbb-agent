@@ -191,6 +191,57 @@ class LongbridgeCLIProvider:
             "market_cap": _to_float(indexes.get("mktcap")),
         }
 
+    def fetch_valuation(self, symbol: str) -> dict[str, Any]:
+        """Fetch PE/PB time series + Longbridge's ai_summary for valuation context.
+
+        Returns raw payload with keys: history (metrics.{pe,pb}.list time series),
+        overview (ai_summary HTML-formatted Chinese conclusion), peers, stocks.
+        Empty dict on failure.
+        """
+        log.info("Longbridge: fetching valuation for %s", symbol)
+        try:
+            payload = _run_longbridge(["valuation", symbol])
+            return payload if isinstance(payload, dict) else {}
+        except LongbridgeCLIError as exc:
+            log.warning("valuation failed for %s: %s", symbol, exc)
+            return {}
+
+    def fetch_institution_rating(self, symbol: str) -> dict[str, Any]:
+        """Fetch analyst rating distribution + target price consensus.
+
+        Returns raw payload with keys: analyst (industry stats + target range),
+        instratings (recommendation + target + evaluate.{strong_buy,buy,hold,sell}).
+        Empty dict on failure.
+        """
+        log.info("Longbridge: fetching institution rating for %s", symbol)
+        try:
+            payload = _run_longbridge(["institution-rating", symbol])
+            return payload if isinstance(payload, dict) else {}
+        except LongbridgeCLIError as exc:
+            log.warning("institution-rating failed for %s: %s", symbol, exc)
+            return {}
+
+    def fetch_business_segments(
+        self, symbol: str, *, history: bool = False, report: str = "af"
+    ) -> dict[str, Any]:
+        """Fetch business segment revenue breakdown.
+
+        Without history: latest snapshot. With history=True: time series; `report`
+        chooses period (af=annual, saf=semi-annual, qf=quarterly).
+        Returns raw payload — for snapshot has top-level `business`; for history
+        has `historical[]`. Empty dict on failure.
+        """
+        log.info("Longbridge: fetching business segments for %s (history=%s)", symbol, history)
+        args = ["business-segments", symbol]
+        if history:
+            args.extend(["--history", "--report", report])
+        try:
+            payload = _run_longbridge(args)
+            return payload if isinstance(payload, dict) else {}
+        except LongbridgeCLIError as exc:
+            log.warning("business-segments failed for %s: %s", symbol, exc)
+            return {}
+
 
 def get_provider(market: str) -> LongbridgeCLIProvider:
     return LongbridgeCLIProvider(market)

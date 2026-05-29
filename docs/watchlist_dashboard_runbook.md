@@ -4,9 +4,10 @@
 
 `scripts/watchlist_dashboard.py` 生成一个统一的 HTML 仪表板，覆盖港股 / A股 / 美股三市场的自选标的，支持 **tab 切换**、**实时数据**、**估值体检** 和 **分部估值拆解（SOTP）**。
 
-**输出**: `outputs/watchlist_dashboard.html`  
-**更新频率**: 每日 17:00（via launchd）、也可手动运行  
-**数据源**: Longbridge CLI（price / PE分位 / 机构目标 / 分部收入 / 评级分布）
+- **输入**: `research_inputs/dashboard_config.json`（baskets / thesis / segments / fx_rates）
+- **输出**: `outputs/watchlist_dashboard.html`
+- **更新频率**: 每日 17:00（via launchd）、也可手动运行
+- **数据源**: Longbridge CLI（price / fundamentals / valuation / segments / ratings）
 
 ---
 
@@ -57,48 +58,45 @@ python3 scripts/watchlist_dashboard.py
 
 编辑 `scripts/watchlist_dashboard.py` 的 `BASKETS` 字典：
 
-```python
-BASKETS: dict[str, list[tuple[str, str]]] = {
-    "HK": [
-        ("700.HK", "腾讯"), 
-        ("9988.HK", "阿里巴巴"),
-        # 添加新港股
-        ("1030.HK", "高鹰国际"),
-    ],
-    "CN": [
-        ("002624.SZ", "完美世界"),
-        # 添加新 A股
-        ("000858.SZ", "五粮液"),
-    ],
-    "US": [
-        ("MSFT.US", "微软"),
-        # 添加新美股
-        ("NVDA.US", "英伟达"),
-    ],
+所有配置都集中在 `research_inputs/dashboard_config.json`：
+
+```json
+{
+  "baskets": {
+    "HK": [["700.HK", "腾讯"], ["1030.HK", "新港股"]],
+    "CN": [["002624.SZ", "完美世界"], ["000858.SZ", "五粮液"]],
+    "US": [["MSFT.US", "微软"], ["NVDA.US", "英伟达"]]
+  }
 }
 ```
 
-保存后下次运行 `watchlist_dashboard.py` 会自动拉取新标的数据。
+保存后下次运行 `watchlist_dashboard.py` 会自动拉取新标的数据。`thesis`（基本面分析）和 `segments`（SOTP 倍数）建议在同一文件内一起补，否则新标的卡片上的「业务/多头/空头/估值」字段会显示「—」。
 
 ### 配置分部估值 (SOTP)
 
-仅限于 **多业务公司**（如腾讯、阿里、小米、美团）。编辑 `SEGMENTS` 字典：
+仅限于 **多业务公司**（如腾讯、阿里、小米、美团）。在 `dashboard_config.json` 的 `segments` 节点里加：
 
-```python
-SEGMENTS: dict[str, dict] = {
-    "1030.HK": {  # 新公司的符号
-        "segments": [
-            {"match": ["核心业务"], "label": "XXX", "ps": 3.5, 
-             "reason": "净利率~XX%×PE~YY → PS~3.5"},
-            {"match": ["新业务"], "label": "YYY", "ps": 2.0,
-             "reason": "亏损期权估值"},
-        ],
-        "extra": [  # 非营收价值（投资组合/净现金）
-            {"label": "投资组合", "value_cny_yi": 500, "reason": "..."}
-        ],
-    },
+```json
+"segments": {
+  "1030.HK": {
+    "segment_currency": "CNY",
+    "segments": [
+      {"match": ["核心业务"], "label": "XXX", "ps": 3.5,
+       "reason": "净利率~XX% × PE~YY → PS~3.5"},
+      {"match": ["新业务"], "label": "YYY", "ps": 2.0,
+       "reason": "亏损期权估值"}
+    ],
+    "extra": [
+      {"label": "投资组合", "value_yi": 500, "reason": "..."}
+    ]
+  }
 }
 ```
+
+关键字段：
+- `segment_currency`：长桥 `business-segments` 返回的报表币种（一般港股内地业务报 CNY，纯美股报 USD）；脚本会自动按 `fx_rates` 换算到现价市值币种。
+- `match`：匹配长桥分部名的关键词列表（大小写不敏感），第一个命中即采用。
+- `extra[].value_yi`：非营收价值（净现金/投资组合），单位「亿」、币种与 `segment_currency` 一致。
 
 **PS 倍数推导方法**：
 ```
@@ -109,17 +107,32 @@ PS = 该段净利率 × 该业务合理PE
 - 互联网服务：净利率50% × PE18 = PS 5.5
 ```
 
+如果发现 SOTP 隐含空间比机构目标价偏离过大（例如 +100% 以上），通常是某段 PS 拍得过高 —— 用现价市值 + 机构目标做反算校准（见 git log 中美团 PS 从 4 → 2 的修正过程）。
+
 ---
 
 ## 自动化刷新
 
-### 配置 launchd（macOS）
+### 一键安装 / 卸载
 
-两个定时任务已预配置在 `~/Library/LaunchAgents/`：
+```bash
+# 安装（幂等，可重复运行）
+./scripts/install_launchd.sh
+
+# 卸载
+./scripts/install_launchd.sh uninstall
+```
+
+脚本会在 `~/Library/LaunchAgents/` 下写两个 plist：
 
 ```
 com.user.watchlist-dashboard-update.plist   # 每日 17:00 刷新
 com.user.watchlist-dashboard-open.plist     # 每日 10:00 打开
+```
+
+如果 Python 解释器或 longbridge 路径不同，安装前可改环境变量：
+```bash
+PYTHON_BIN=/usr/local/bin/python3 LONGBRIDGE_BIN_DIR=$HOME/bin ./scripts/install_launchd.sh
 ```
 
 ### 查看状态 / 手动触发
@@ -131,17 +144,9 @@ launchctl list | grep watchlist-dashboard
 # 手动触发一次更新（不必等到 17:00）
 launchctl kickstart -k gui/$(id -u)/com.user.watchlist-dashboard-update
 
-# 查看日志
-tail -f ~/openbb-agent/outputs/.launchd_logs/dashboard_update.out.log
-tail -f ~/openbb-agent/outputs/.launchd_logs/dashboard_update.err.log
-```
-
-### 卸载定时任务
-
-```bash
-UID=$(id -u)
-launchctl bootout gui/$UID ~/Library/LaunchAgents/com.user.watchlist-dashboard-update.plist
-launchctl bootout gui/$UID ~/Library/LaunchAgents/com.user.watchlist-dashboard-open.plist
+# 查看日志（路径假设项目在 ~/openbb-agent，可按需调整）
+tail -f outputs/.launchd_logs/dashboard_update.out.log
+tail -f outputs/.launchd_logs/dashboard_update.err.log
 ```
 
 ---
@@ -152,10 +157,13 @@ launchctl bootout gui/$UID ~/Library/LaunchAgents/com.user.watchlist-dashboard-o
 
 | 徽章 | 含义 | 色条 |
 |---|---|---|
-| **建仓** | 突破达标且未越追高线，右侧确认机会 | 绿色 |
+| **建仓** | 突破达标且未越追高线（close ≤ high_20d + K×ATR），右侧确认机会 | 绿色 |
 | **等回踩** | 已突破但冲高过头，挂回踩单别追 | 橙色 |
-| **观察** | 接近突破、结构健康，等放量触发 | 蓝色 |
+| **观察** | 接近突破、结构健康（站上 MA20 且距 20 日高 ≥ -5%），等放量触发 | 蓝色 |
+| **回踩-谨慎** | radar 检测到回踩信号，历史回测表现弱于突破，建议小仓位试探 | 蓝色 |
 | **不碰** | 下降趋势无信号，接飞刀区 | 灰色 |
+
+> 5 个 verdict 的判定逻辑都在 `compute_verdict()` 里，有 6 个 pin 它的单元测试。要改规则就 grep 它再跑 `pytest tests/test_watchlist_dashboard.py`。
 
 ### 估值体检条
 
@@ -165,17 +173,18 @@ launchctl bootout gui/$UID ~/Library/LaunchAgents/com.user.watchlist-dashboard-o
 
 ### 分部估值表（SOTP）
 
-示例：腾讯
+示例：腾讯（4 段 + 1 行 extra）
 
-| 业务段 | 营收 | PS | 估值 | 占比 |
+| 业务段 | 营收 (CNY) | PS | 估值 (CNY) | 占比 |
 |---|---|---|---|---|
-| 增值服务 | 3693亿 | ×7.0 | 25850亿 | 52% |
-| 金融科技 | 2294亿 | ×3.5 | 8030亿 | 16% |
-| 营销服务 | 1450亿 | ×7.0 | 10148亿 | 20% |
-| 投资组合 | — | — | 5800亿 | 12% |
-| **加总** | | | **49828亿** | **100%** |
+| 增值服务(游戏+社交) | 3693亿 | ×7.0 | 25850亿 | 52% |
+| 营销服务(广告) | 1450亿 | ×7.0 | 10148亿 | 20% |
+| 金融科技及企业服务 | 2294亿 | ×3.5 | 8030亿 | 16% |
+| 其他 | 81亿 | ×1.0 | 81亿 | 0% |
+| 投资组合(NAV×0.65) | — | — | 5800亿 | 12% |
+| **加总** | | | **~49909亿** | **100%** |
 
-加总换汇后与现价市值比较，隐含上行/下行空间。
+加总按 `fx_rates` 换算到现价市值币种（腾讯 mktcap 报 HKD，段报 CNY，用 `CNY/HKD = 1.087`）后与现价市值比较，得到隐含上行/下行 %。卡片底部小字会显示 `段CNY×1.087→HKD` 让你一眼看出有没有 FX 异常。
 
 ---
 
