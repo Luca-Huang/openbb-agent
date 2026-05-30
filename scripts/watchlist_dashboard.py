@@ -346,8 +346,41 @@ def _cap_str(v):
     return f"{v/1e12:.2f} 万亿" if v >= 1e12 else f"{v/1e8:.0f} 亿"
 
 
+GLOSSARY = {
+    # 基本面
+    "PE": "市盈率 = 股价 ÷ 每股盈利。花多少钱买1块钱年利润。10-25 算合理，<10 偏便宜，>30 偏贵（不同行业差异大）。",
+    "PB": "市净率 = 股价 ÷ 每股净资产。<1 破净，1-3 中等，>5 偏高。回购大户(如苹果)会因为净资产被压缩导致 PB 虚高，不能单看。",
+    "EPS(TTM)": "每股盈利(最近12个月)。是 PE 计算的分母；TTM 比单年报更新更及时。",
+    "股息率": "年股息 ÷ 当前股价。如果只靠分红每年能拿回多少%。3-5% 算稳健红利股。",
+    "市值": "总股本 × 当前股价。公司在市场上整体值多少钱。",
+    "换手率": "当日成交股数 ÷ 流通股本。流动性指标：<0.5% 冷清，1-3% 活跃，>5% 极活跃(情绪过热)。",
+    # 估值健康
+    "估值便宜分位": "当前 PE 在过去 3-5 年的位置。100%=比过去任何时候都便宜，0%=比过去都贵。配合行业排名看。",
+    "机构目标": "卖方分析师一致预期目标价 + 评级分布(强买/买/持/卖)。+N% 是相对当前价的上行空间。一致看多 + 0 看空是最强信号。",
+    # SOTP
+    "分部估值 (SOTP)": "Sum-Of-The-Parts：把公司各业务分别估值再加总，避免把不同业务硬套同一个 PE。适合多业务结构(腾讯/阿里/小米等)。",
+    # 技术信号
+    "触发": "技术信号系统当前给出的入场信号：突破/回踩/无。'突破' = 价格创新高且放量。",
+    "阶段": "趋势阶段：上升(MA20>MA50>MA200) / 下降 / 震荡。",
+    "RSI": "相对强弱指数。>70 超买(可能短期回调)，<30 超卖(可能反弹)，30-70 中性。",
+    "量比": "当日成交量 ÷ 过去 20 日平均。>1.5 放量(信号变强)，<0.5 缩量(信号变弱)。",
+    "距20日高": "当前价相对过去 20 日最高价的距离。-5% 内属于'高位附近'。",
+    "vs MA200": "当前价相对 200 日均线。>0 长期趋势向上，<0 趋势向下，<-10% 跌得比较深。",
+    "60日回撤": "过去 60 天从最高点回落的最大幅度。",
+    "止损位": "技术系统建议的止损价格 + 当前到止损的风险%。建议风险 < 5%。",
+}
+
+
+def _gl(label: str) -> str:
+    """Wrap label with tooltip if glossary defines it."""
+    tip = GLOSSARY.get(label)
+    if not tip:
+        return escape(label)
+    return f'<span class="g" data-tip="{escape(tip)}">{escape(label)}</span>'
+
+
 def _metric(label, value):
-    return f'<div class="m"><span class="ml">{label}</span><span class="mv">{value}</span></div>'
+    return f'<div class="m"><span class="ml">{_gl(label)}</span><span class="mv">{value}</span></div>'
 
 
 def _valh(a: dict) -> str:
@@ -358,7 +391,7 @@ def _valh(a: dict) -> str:
         w = max(0, min(100, cp))
         tip = escape(a.get("val_summary") or "")
         parts.append(
-            f'<div class="vh"><span class="vhl">估值便宜分位</span>'
+            f'<div class="vh"><span class="vhl">{_gl("估值便宜分位")}</span>'
             f'<div class="bar" title="{tip}"><div class="bf" style="width:{w:.0f}%"></div></div>'
             f'<span class="vhv">{cp:.0f}%</span></div>'
         )
@@ -373,7 +406,7 @@ def _valh(a: dict) -> str:
             if isinstance(a.get(k), (int, float))
         )
         parts.append(
-            f'<div class="vh"><span class="vhl">机构目标</span>'
+            f'<div class="vh"><span class="vhl">{_gl("机构目标")}</span>'
             f'<span class="vhv2">{a.get("target_ccy","")}{tgt:.0f} {up_s}'
             + (f' · {dist}' if dist else "") + '</span></div>'
         )
@@ -413,7 +446,7 @@ def _sotp(a: dict) -> str:
                else f"同币种 {s['seg_ccy']}")
     mode = "手填利润×PE" if s.get("mode") == "manual" else "营收×PS"
     return (
-        '<section class="sotp"><div class="sh">分部估值 (SOTP) '
+        f'<section class="sotp"><div class="sh">{_gl("分部估值 (SOTP)")} '
         f'<span class="sh-x">{mode} · {fx_note} · vs 现价市值</span></div>'
         f'<table class="st"><tbody>{"".join(body)}</tbody></table>'
         f'<div class="sf"><span>目标 <b>{_wan(tgt)}</b> · 现价 {_wan(mc)}</span>{badge}</div>{bar}</section>'
@@ -657,6 +690,22 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
   .ec ul {{ margin:0; padding-left:16px; font-size:11.5px; line-height:1.55; color:#c8cdd6; }}
   .ec li {{ margin-bottom:3px; }}
   .bh {{ font-size:11.5px; font-weight:600; color:var(--txt); letter-spacing:.3px; }}
+  /* glossary tooltip (hover over PE/PB/RSI/etc to see plain-language explanation) */
+  .g {{ position:relative; cursor:help; border-bottom:1px dotted #4a5160; }}
+  .g:hover::after {{
+    content:attr(data-tip);
+    position:absolute; left:50%; bottom:calc(100% + 6px); transform:translateX(-50%);
+    background:#1c2029; border:1px solid #3a4150; border-radius:6px;
+    padding:8px 11px; width:260px; font-size:11.5px; font-weight:400;
+    line-height:1.55; color:#e6e8ec; letter-spacing:0;
+    white-space:normal; text-align:left; z-index:200;
+    box-shadow:0 4px 18px rgba(0,0,0,.5);
+  }}
+  .g:hover::before {{
+    content:""; position:absolute; left:50%; bottom:calc(100% + 1px);
+    transform:translateX(-50%); width:0; height:0;
+    border:5px solid transparent; border-top-color:#3a4150; z-index:201;
+  }}
   footer {{ color:var(--dim); font-size:11px; padding:0 22px 30px; max-width:1500px; }}
 </style></head>
 <body>
