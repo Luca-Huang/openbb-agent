@@ -420,6 +420,65 @@ def _sotp(a: dict) -> str:
     )
 
 
+def _thesis_html(th: dict) -> str:
+    """Render thesis section.
+
+    New schema (preferred): th has `narrative` (list of paragraphs) + optional
+    `non_consensus`, `catalysts` (list of {date,event,watch}), `sell_triggers`
+    ({"前瞻": [...], "滞后": [...]}).
+
+    Legacy schema (fallback): th has 业务/多头/空头/估值 as single-sentence fields.
+    """
+    narrative = th.get("narrative")
+    if not narrative:
+        # legacy fallback
+        return "".join(
+            f'<div class="t"><span class="tk">{escape(k)}</span>'
+            f'<span class="tv">{escape(th.get(k,"—"))}</span></div>'
+            for k in ("业务", "多头", "空头", "估值")
+        )
+
+    paras = "".join(f"<p>{escape(p)}</p>" for p in narrative)
+    parts = [f'<div class="narr">{paras}</div>']
+
+    nc = th.get("non_consensus")
+    if nc:
+        parts.append(
+            f'<div class="nc"><div class="bh">非共识观点</div>'
+            f'<div class="bb">{escape(nc)}</div></div>'
+        )
+
+    cats = th.get("catalysts") or []
+    if cats:
+        items = "".join(
+            f'<li><b>{escape(str(c.get("date","?")))}</b> '
+            f'{escape(str(c.get("event","")))} '
+            f'<span class="dim">— 看 {escape(str(c.get("watch","")))}</span></li>'
+            for c in cats
+        )
+        parts.append(
+            f'<details class="cat" open><summary class="bh">近期催化日历</summary>'
+            f'<ul>{items}</ul></details>'
+        )
+
+    triggers = th.get("sell_triggers") or {}
+    if triggers:
+        cols = []
+        for k in ("前瞻", "滞后"):
+            lst = triggers.get(k) or []
+            if not lst:
+                continue
+            items = "".join(f"<li>{escape(s)}</li>" for s in lst)
+            cols.append(f'<div class="ec"><b>{k}</b><ul>{items}</ul></div>')
+        if cols:
+            parts.append(
+                f'<details class="exit"><summary class="bh">卖出触发条件</summary>'
+                f'<div class="eg">{"".join(cols)}</div></details>'
+            )
+
+    return "".join(parts)
+
+
 def card(a: dict, thesis: dict) -> str:
     order, cls, vexpl = VERDICT_META[a["verdict"]]
     th = thesis.get(a["symbol"], {})
@@ -439,10 +498,7 @@ def card(a: dict, thesis: dict) -> str:
         _metric("60日回撤", _num(a["drawdown"], "{:.1f}%")),
         _metric("止损位", f'{_num(a["stop"])}' + (f' (风险{_num(a["risk_pct"],"{:.1f}%")})' if a["risk_pct"] else "")),
     ])
-    thesis_html = "".join(
-        f'<div class="t"><span class="tk">{k}</span><span class="tv">{escape(th.get(k,"—"))}</span></div>'
-        for k in ("业务", "多头", "空头", "估值")
-    )
+    thesis_html = _thesis_html(th)
     return f"""
     <article class="card {cls}" data-order="{order}">
       <header>
@@ -581,6 +637,26 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
   .t {{ display:flex; gap:8px; margin-bottom:5px; }}
   .tk {{ flex:0 0 34px; color:var(--dim); font-size:12px; }}
   .tv {{ flex:1; font-size:12.5px; color:#c8cdd6; }}
+  /* narrative-style thesis (new schema) */
+  .narr p {{ margin:0 0 9px; font-size:12.5px; line-height:1.7; color:#d4d8e0; text-indent:2em; }}
+  .narr p:last-child {{ margin-bottom:0; }}
+  .nc {{ margin-top:10px; padding:9px 11px; background:rgba(59,125,216,0.08);
+         border-left:3px solid var(--watch); border-radius:4px; }}
+  .nc .bb {{ font-size:12px; line-height:1.65; color:#d4d8e0; margin-top:4px; }}
+  .cat, .exit {{ margin-top:10px; }}
+  .cat summary, .exit summary {{ cursor:pointer; list-style:none; user-select:none; }}
+  .cat summary::-webkit-details-marker, .exit summary::-webkit-details-marker {{ display:none; }}
+  .cat summary::before, .exit summary::before {{ content:"▸ "; color:var(--dim); font-size:10px; }}
+  .cat[open] summary::before, .exit[open] summary::before {{ content:"▾ "; }}
+  .cat ul {{ margin:6px 0 0; padding-left:18px; font-size:12px; line-height:1.65; color:#c8cdd6; }}
+  .cat li {{ margin-bottom:3px; }}
+  .cat li b {{ color:var(--watch); font-weight:600; }}
+  .cat .dim {{ color:var(--dim); }}
+  .eg {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }}
+  .ec b {{ display:block; font-size:11.5px; color:var(--wait); margin-bottom:4px; }}
+  .ec ul {{ margin:0; padding-left:16px; font-size:11.5px; line-height:1.55; color:#c8cdd6; }}
+  .ec li {{ margin-bottom:3px; }}
+  .bh {{ font-size:11.5px; font-weight:600; color:var(--txt); letter-spacing:.3px; }}
   footer {{ color:var(--dim); font-size:11px; padding:0 22px 30px; max-width:1500px; }}
 </style></head>
 <body>
