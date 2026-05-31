@@ -716,6 +716,47 @@ class AKShareCNProvider:
         return df.sort_values("announce_date", ascending=False, na_position="last").reset_index(drop=True)
 
 
+    def fetch_research_reports(self, symbol: str) -> pd.DataFrame:
+        """Fetch 东方财富 individual-stock research reports for an A-share.
+
+        Returns one row per report with columns: announce_date, institution,
+        rating, eps_2026/eps_2027/eps_2028 (forward EPS forecasts), pe_2026
+        (PE at publish-time price).
+
+        Empty DataFrame if no reports / endpoint fails. Used to compute
+        analyst-consensus dispersion as a proxy for missing Longbridge
+        rating data on A-shares.
+        """
+        log.info("AKShare CN: fetching research reports for %s", symbol)
+        code = symbol.split(".", 1)[0]
+        rows = _retry_get_json(
+            "/api/public/stock_research_report_em",
+            {"symbol": code},
+        )
+        if not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        rename = {
+            "日期": "announce_date",
+            "机构": "institution",
+            "东财评级": "rating",
+            "报告名称": "report_name",
+            "2026-盈利预测-收益": "eps_2026",
+            "2026-盈利预测-市盈率": "pe_2026",
+            "2027-盈利预测-收益": "eps_2027",
+            "2028-盈利预测-收益": "eps_2028",
+        }
+        keep = [c for c in rename if c in df.columns]
+        df = df[keep].rename(columns=rename)
+        if "announce_date" in df.columns:
+            df["announce_date"] = pd.to_datetime(df["announce_date"], errors="coerce")
+        for col in ("eps_2026", "pe_2026", "eps_2027", "eps_2028"):
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        df["symbol"] = symbol.upper()
+        return df.sort_values("announce_date", ascending=False, na_position="last").reset_index(drop=True)
+
+
 def get_provider(market: str = "CN") -> AKShareCNProvider:
     """Return an AKShareCNProvider — only ``CN`` is supported."""
     return AKShareCNProvider(market)

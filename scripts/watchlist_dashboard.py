@@ -97,12 +97,68 @@ def _valuation_metrics(payload: dict) -> dict:
     return {"pe_cheap_pct": cheap_pct, "val_summary": summary}
 
 
+def _akshare_consensus_for_a_share(symbol: str, current_price: float, current_pe: float | None) -> dict:
+    """Synthesize an 'implied target' consensus for A-shares from 东财 reports.
+
+    Returns the same shape as `_ratings_metrics()` so callers don't branch.
+    'target' here = mean(2026 EPS forecast) × current PE — explicitly an
+    implied target, not a sell-side stated target price. The
+    `is_implied=True` flag is rendered in the tooltip.
+    """
+    empty = {"target": None, "target_low": None, "target_high": None,
+             "target_ccy": "¥", "recommend": "",
+             "rate_sb": None, "rate_buy": None, "rate_hold": None, "rate_sell": None,
+             "is_implied": True}
+    try:
+        from research_workbench.data_sources.akshare_cn import get_provider as cn_get_provider
+        ak_prov = cn_get_provider("CN")
+        df = _safe(f"research_reports[{symbol}]", lambda: ak_prov.fetch_research_reports(symbol),
+                   pd.DataFrame())
+    except Exception:
+        return empty
+    if df is None or df.empty or current_pe is None or current_price is None:
+        return empty
+    # Only reports from last 12 months — older forecasts are stale
+    cutoff = pd.Timestamp.now() - pd.Timedelta(days=365)
+    df = df[df["announce_date"] >= cutoff] if "announce_date" in df.columns else df
+    if df.empty or "eps_2026" not in df.columns:
+        return empty
+    eps_series = df["eps_2026"].dropna()
+    if len(eps_series) < 3:
+        return empty
+    eps_low, eps_mean, eps_high = eps_series.min(), eps_series.mean(), eps_series.max()
+    # 'Implied target' = forecast EPS × current PE (assumes PE unchanged)
+    tgt_low = eps_low * current_pe
+    tgt_high = eps_high * current_pe
+    tgt_mean = eps_mean * current_pe
+    # 东财评级 distribution
+    ratings = df["rating"].dropna() if "rating" in df.columns else pd.Series(dtype=str)
+    sb = int((ratings == "强烈推荐").sum()) if not ratings.empty else 0
+    buy = int(((ratings == "买入") | (ratings == "推荐")).sum())
+    hold = int(((ratings == "增持") | (ratings == "中性")).sum())
+    sell = int(((ratings == "减持") | (ratings == "卖出")).sum())
+    return {
+        "target": float(tgt_mean),
+        "target_low": float(tgt_low),
+        "target_high": float(tgt_high),
+        "target_ccy": "¥",
+        "recommend": "buy" if buy + sb > hold + sell else "hold",
+        "rate_sb": sb, "rate_buy": buy, "rate_hold": hold, "rate_sell": sell,
+        "is_implied": True,
+    }
+
+
 def _ratings_metrics(payload: dict) -> dict:
     """Distill Longbridge institution-rating payload."""
     ins = payload.get("instratings", {}) or {}
     ev = ins.get("evaluate", {}) or {}
+    # `analyst.target` carries lowest/highest from the underlying analyst pool —
+    # essential for showing dispersion rather than a single misleading mean.
+    an_tgt = (payload.get("analyst", {}) or {}).get("target", {}) or {}
     return {
         "target": _fnum(ins.get("target")),
+        "target_low": _fnum(an_tgt.get("lowest_price")),
+        "target_high": _fnum(an_tgt.get("highest_price")),
         "target_ccy": ins.get("ccy_symbol", ""),
         "recommend": ins.get("recommend", ""),
         "rate_sb": ev.get("strong_buy"),
@@ -304,6 +360,13 @@ def analyze(symbol: str, market: str, cfg: dict) -> dict:
     rate_payload = _safe(f"institution-rating[{symbol}]", lambda: prov.fetch_institution_rating(symbol), {}) or {}
     rate = _ratings_metrics(rate_payload)
 
+    # A-share fallback: Longbridge has no analyst rating data for A-shares.
+    # Pull 东财 research reports via AKShare and synthesize an implied-target
+    # consensus from EPS forecasts × current PE. Marked `is_implied=True` so
+    # tooltip can disclose the methodology difference.
+    if market == "CN" and not rate.get("target"):
+        rate = _akshare_consensus_for_a_share(symbol, c, fund.get("end_pe"))
+
     target_upside = (rate["target"] / c - 1) * 100 if rate.get("target") and c else None
     sotp = build_sotp(symbol, cfg, prov, mktcap, mc_ccy, cfg.get("fx_rates", {}))
 
@@ -321,7 +384,9 @@ def analyze(symbol: str, market: str, cfg: dict) -> dict:
         "mktcap": mktcap, "mktcap_ccy": mc_ccy, "turnover": fund.get("turnover_rate"),
         "pe_cheap_pct": val["pe_cheap_pct"], "val_summary": val["val_summary"],
         "target": rate.get("target"), "target_ccy": rate.get("target_ccy"),
+        "target_low": rate.get("target_low"), "target_high": rate.get("target_high"),
         "target_upside": target_upside, "recommend": rate.get("recommend"),
+        "is_implied_target": rate.get("is_implied", False),
         "rate_sb": rate.get("rate_sb"), "rate_buy": rate.get("rate_buy"),
         "rate_hold": rate.get("rate_hold"), "rate_sell": rate.get("rate_sell"),
         "sotp": sotp,
@@ -356,7 +421,7 @@ GLOSSARY = {
     "换手率": "当日成交股数 ÷ 流通股本。流动性指标：<0.5% 冷清，1-3% 活跃，>5% 极活跃(情绪过热)。",
     # 估值健康
     "估值便宜分位": "当前 PE 在过去 3-5 年的位置。100%=比过去任何时候都便宜，0%=比过去都贵。配合行业排名看。",
-    "机构目标": "卖方分析师一致预期目标价 + 评级分布(强买/买/持/卖)。+N% 是相对当前价的上行空间。一致看多 + 0 看空是最强信号。",
+    "机构目标": "横条 = 卖方分析师目标价的真实区间(最低-最高)，●=现价位置，细线=均值位置。区间宽=分歧大；现价贴下沿=市场对乐观共识打折(往往是买点)；贴上沿=已经透支预期。'+N%' 仅是相对均值，单独看会误导。",
     # SOTP
     "分部估值 (SOTP)": "Sum-Of-The-Parts：把公司各业务分别估值再加总，避免把不同业务硬套同一个 PE。适合多业务结构(腾讯/阿里/小米等)。",
     # 技术信号
@@ -397,19 +462,68 @@ def _valh(a: dict) -> str:
         )
     tgt = a.get("target")
     if isinstance(tgt, (int, float)) and pd.notna(tgt):
+        lo = a.get("target_low"); hi = a.get("target_high"); cur = a.get("close")
+        ccy = a.get("target_ccy", "")
         up = a.get("target_upside")
         up_cls = "up" if (up or 0) >= 0 else "down"
-        up_s = f'<em class="{up_cls}">{up:+.1f}%</em>' if isinstance(up, (int, float)) and pd.notna(up) else ""
+        up_s = (f'<em class="{up_cls}">{up:+.0f}%</em>'
+                if isinstance(up, (int, float)) and pd.notna(up) else "")
+        # rating distribution chips
         dist = "/".join(
             f"{lab}{a[k]}" for lab, k in
             (("强买", "rate_sb"), ("买", "rate_buy"), ("持", "rate_hold"), ("卖", "rate_sell"))
             if isinstance(a.get(k), (int, float))
         )
-        parts.append(
-            f'<div class="vh"><span class="vhl">{_gl("机构目标")}</span>'
-            f'<span class="vhv2">{a.get("target_ccy","")}{tgt:.0f} {up_s}'
-            + (f' · {dist}' if dist else "") + '</span></div>'
-        )
+        # If we have a real range, render the dispersion bar; else fall back to text-only.
+        if (isinstance(lo, (int, float)) and isinstance(hi, (int, float)) and hi > lo
+                and isinstance(cur, (int, float)) and pd.notna(cur)):
+            span = hi - lo
+            pos = max(0, min(100, (cur - lo) / span * 100))
+            mean_pos = max(0, min(100, (tgt - lo) / span * 100))
+            # qualitative tag for where current price sits
+            if pos < 15:
+                tag, tag_cls = "贴下沿", "buy"   # market discounts analysts → contrarian buy
+            elif pos < 40:
+                tag, tag_cls = "偏下", "buy"
+            elif pos < 60:
+                tag, tag_cls = "中段", "watch"
+            elif pos < 85:
+                tag, tag_cls = "偏上", "wait"
+            else:
+                tag, tag_cls = "贴上沿", "avoid"
+            n_cov = (a.get('rate_sb') or 0)+(a.get('rate_buy') or 0)+(a.get('rate_hold') or 0)+(a.get('rate_sell') or 0)
+            if a.get("is_implied_target"):
+                tip = (f"⚠️ 隐含目标(非真目标价)：东财研报无目标价字段，用最近 12 个月研报的"
+                       f"2026 EPS 预测 × 当前 PE 反推。区间 {ccy}{lo:.2f} - {ccy}{hi:.2f}"
+                       f"，均 {ccy}{tgt:.2f}（{n_cov} 家覆盖）。现价 {ccy}{cur:.2f} 位置 {pos:.0f}%。"
+                       f"PE 假设不变是简化，不代表真目标。")
+            else:
+                tip = (f"分析师目标价区间 {ccy}{lo:.0f} - {ccy}{hi:.0f}（覆盖 {n_cov} 家）。"
+                       f"现价 {ccy}{cur:.0f} 处于区间 {pos:.0f}% 位（{tag}）。"
+                       f"均值 {ccy}{tgt:.0f}。位置越靠下沿 = 市场对乐观共识打折。")
+            label = "机构目标" + (' <span class="impl-tag">隐含</span>' if a.get("is_implied_target") else "")
+            parts.append(
+                f'<div class="vh"><span class="vhl">{_gl("机构目标") if not a.get("is_implied_target") else label}</span>'
+                f'<div class="rangebar" title="{escape(tip)}">'
+                f'  <div class="rb-mean" style="left:{mean_pos:.1f}%" title="均值位置"></div>'
+                f'  <div class="rb-cur" style="left:{pos:.1f}%"></div>'
+                f'</div>'
+                f'<span class="vhv-rb {tag_cls}">{pos:.0f}%·{tag}</span></div>'
+                f'<div class="vh-meta">'
+                f'<span class="rb-lo">{ccy}{lo:.0f}</span> – '
+                f'<b>现价 {ccy}{cur:.0f}</b> – '
+                f'均 {ccy}{tgt:.0f} {up_s} – '
+                f'<span class="rb-hi">{ccy}{hi:.0f}</span>'
+                + (f' · {dist}' if dist else "") +
+                '</div>'
+            )
+        else:
+            # fallback when range missing (e.g., A 股 small caps)
+            parts.append(
+                f'<div class="vh"><span class="vhl">{_gl("机构目标")}</span>'
+                f'<span class="vhv2">{ccy}{tgt:.0f} {up_s}'
+                + (f' · {dist}' if dist else "") + '</span></div>'
+            )
     return f'<section class="valh">{"".join(parts)}</section>' if parts else ""
 
 
@@ -653,6 +767,25 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
   .vhv2 {{ flex:1; font-size:12px; font-variant-numeric:tabular-nums; }}
   .vhv2 em {{ font-style:normal; margin-left:3px; }}
   .vhv2 em.up {{ color:var(--up); }} .vhv2 em.down {{ color:var(--down); }}
+  /* analyst-target range bar: shows dispersion (low..high) with current price marker */
+  .rangebar {{ flex:1; position:relative; height:9px; background:linear-gradient(90deg,
+              rgba(31,157,87,0.18), rgba(59,125,216,0.22), rgba(229,83,75,0.18));
+              border-radius:5px; border:1px solid var(--line); }}
+  .rb-cur {{ position:absolute; top:-3px; bottom:-3px; width:3px;
+             background:#ffd54a; border-radius:2px;
+             box-shadow:0 0 4px rgba(255,213,74,.7); }}
+  .rb-mean {{ position:absolute; top:0; bottom:0; width:1px; background:var(--dim); opacity:.6; }}
+  .vhv-rb {{ flex:0 0 auto; font-size:11.5px; font-variant-numeric:tabular-nums;
+             padding:1px 7px; border-radius:10px; color:#fff; font-weight:600; }}
+  .vhv-rb.buy {{ background:var(--buy); }} .vhv-rb.wait {{ background:var(--wait); }}
+  .vhv-rb.watch {{ background:var(--watch); }} .vhv-rb.avoid {{ background:var(--avoid); }}
+  .vh-meta {{ font-size:11px; color:var(--dim); padding:3px 0 0 78px;
+              font-variant-numeric:tabular-nums; }}
+  .vh-meta b {{ color:var(--txt); }}
+  .vh-meta .rb-lo {{ color:var(--buy); }}
+  .vh-meta .rb-hi {{ color:var(--up); }}
+  .impl-tag {{ display:inline-block; font-size:9px; padding:1px 4px; border-radius:3px;
+               background:var(--wait); color:#fff; vertical-align:middle; margin-left:3px; }}
   .sotp {{ border-top:1px dashed var(--line); padding-top:9px; margin-bottom:10px; }}
   .sh {{ font-size:12px; font-weight:600; margin-bottom:5px; }}
   .sh-x {{ color:var(--dim); font-weight:400; font-size:10.5px; margin-left:4px; }}
