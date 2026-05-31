@@ -97,6 +97,57 @@ def _valuation_metrics(payload: dict) -> dict:
     return {"pe_cheap_pct": cheap_pct, "val_summary": summary}
 
 
+def _akshare_shareholder_changes(symbol: str) -> list[dict]:
+    """Pull recent shareholder buy/sell records for an A-share.
+
+    Returns up to 5 records within last 180 days, sorted newest-first.
+    Each record: {date, shareholder, change_text, shares, avg_price, is_buy}.
+    """
+    try:
+        from research_workbench.data_sources.akshare_cn import get_provider as cn_get_provider
+        df = _safe(f"shareholder[{symbol}]",
+                   lambda: cn_get_provider("CN").fetch_shareholder_changes(symbol),
+                   pd.DataFrame())
+    except Exception:
+        return []
+    if df is None or df.empty:
+        return []
+    cutoff = pd.Timestamp.now() - pd.Timedelta(days=180)
+    if "announce_date" in df.columns:
+        df = df[df["announce_date"] >= cutoff]
+    if df.empty:
+        return []
+    out: list[dict] = []
+    for _, row in df.head(5).iterrows():
+        text = str(row.get("change_text", ""))
+        out.append({
+            "date": row["announce_date"].strftime("%Y-%m-%d") if pd.notna(row.get("announce_date")) else "—",
+            "shareholder": str(row.get("shareholder", ""))[:24],
+            "change_text": text,
+            "shares": row.get("change_shares"),
+            "avg_price": row.get("avg_price"),
+            "is_buy": "增" in text,
+        })
+    return out
+
+
+def load_holdings() -> dict[str, dict]:
+    """Load current holdings keyed by bare code (e.g. '002602' → row).
+
+    Reads analysis.json (output of analyze.py). Returns {} if missing/malformed
+    so dashboard never fails when holdings file isn't there.
+    """
+    path = ROOT / "analysis.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {str(h.get("code", "")).strip(): h for h in data.get("holdings", []) if h.get("code")}
+    except Exception as exc:
+        log.warning("load_holdings failed: %s", exc)
+        return {}
+
+
 def _akshare_consensus_for_a_share(symbol: str, current_price: float, current_pe: float | None) -> dict:
     """Synthesize an 'implied target' consensus for A-shares from 东财 reports.
 
@@ -127,10 +178,15 @@ def _akshare_consensus_for_a_share(symbol: str, current_price: float, current_pe
     if len(eps_series) < 3:
         return empty
     eps_low, eps_mean, eps_high = eps_series.min(), eps_series.mean(), eps_series.max()
-    # 'Implied target' = forecast EPS × current PE (assumes PE unchanged)
-    tgt_low = eps_low * current_pe
-    tgt_high = eps_high * current_pe
-    tgt_mean = eps_mean * current_pe
+    # 'Implied target' = forecast EPS × reasonable PE multiple.
+    # Cap PE at 25 to avoid the early-growth trap: e.g. 完美世界 has TTM PE 51
+    # (low EPS base before 异环), so forecast EPS × current PE → +200% nonsense.
+    # When EPS actually grows, PE compresses; capping at 25 reflects that.
+    PE_CAP = 25.0
+    pe_used = min(current_pe, PE_CAP)
+    tgt_low = eps_low * pe_used
+    tgt_high = eps_high * pe_used
+    tgt_mean = eps_mean * pe_used
     # 东财评级 distribution
     ratings = df["rating"].dropna() if "rating" in df.columns else pd.Series(dtype=str)
     sb = int((ratings == "强烈推荐").sum()) if not ratings.empty else 0
@@ -364,8 +420,12 @@ def analyze(symbol: str, market: str, cfg: dict) -> dict:
     # Pull 东财 research reports via AKShare and synthesize an implied-target
     # consensus from EPS forecasts × current PE. Marked `is_implied=True` so
     # tooltip can disclose the methodology difference.
+    shareholder_changes: list[dict] = []
     if market == "CN" and not rate.get("target"):
         rate = _akshare_consensus_for_a_share(symbol, c, fund.get("end_pe"))
+    # Shareholder buy/sell signal — only for A-shares, latest 3 within 180 days.
+    if market == "CN":
+        shareholder_changes = _akshare_shareholder_changes(symbol)
 
     target_upside = (rate["target"] / c - 1) * 100 if rate.get("target") and c else None
     sotp = build_sotp(symbol, cfg, prov, mktcap, mc_ccy, cfg.get("fx_rates", {}))
@@ -390,6 +450,7 @@ def analyze(symbol: str, market: str, cfg: dict) -> dict:
         "rate_sb": rate.get("rate_sb"), "rate_buy": rate.get("rate_buy"),
         "rate_hold": rate.get("rate_hold"), "rate_sell": rate.get("rate_sell"),
         "sotp": sotp,
+        "shareholder_changes": shareholder_changes,
     }
 
 
@@ -494,9 +555,9 @@ def _valh(a: dict) -> str:
             n_cov = (a.get('rate_sb') or 0)+(a.get('rate_buy') or 0)+(a.get('rate_hold') or 0)+(a.get('rate_sell') or 0)
             if a.get("is_implied_target"):
                 tip = (f"⚠️ 隐含目标(非真目标价)：东财研报无目标价字段，用最近 12 个月研报的"
-                       f"2026 EPS 预测 × 当前 PE 反推。区间 {ccy}{lo:.2f} - {ccy}{hi:.2f}"
+                       f"2026 EPS 预测 × min(当前PE, 25) 反推。区间 {ccy}{lo:.2f} - {ccy}{hi:.2f}"
                        f"，均 {ccy}{tgt:.2f}（{n_cov} 家覆盖）。现价 {ccy}{cur:.2f} 位置 {pos:.0f}%。"
-                       f"PE 假设不变是简化，不代表真目标。")
+                       f"PE 上限 25 防早期成长股目标价虚高(完美世界 PE 51 案例)。")
             else:
                 tip = (f"分析师目标价区间 {ccy}{lo:.0f} - {ccy}{hi:.0f}（覆盖 {n_cov} 家）。"
                        f"现价 {ccy}{cur:.0f} 处于区间 {pos:.0f}% 位（{tag}）。"
@@ -597,11 +658,23 @@ def _thesis_html(th: dict) -> str:
 
     cats = th.get("catalysts") or []
     if cats:
+        # Tag expired entries — render greyed out and demoted, so stale config
+        # (e.g. 完美世界 异环 2026-04-23) doesn't show as upcoming.
+        today = pd.Timestamp.now().normalize()
+        def _is_past(c):
+            d = str(c.get("date", ""))
+            # only fully numeric YYYY-MM-DD entries are reliably parseable;
+            # 'YYYY-MM' or '2026-Q3' etc. → treat as not-past (forward-looking)
+            try:
+                return pd.Timestamp(d) < today
+            except (ValueError, TypeError):
+                return False
         items = "".join(
-            f'<li><b>{escape(str(c.get("date","?")))}</b> '
+            f'<li class="{"past" if _is_past(c) else ""}"><b>{escape(str(c.get("date","?")))}</b> '
+            f'{("✓ 已发生 · " if _is_past(c) else "")}'
             f'{escape(str(c.get("event","")))} '
             f'<span class="dim">— 看 {escape(str(c.get("watch","")))}</span></li>'
-            for c in cats
+            for c in sorted(cats, key=lambda x: (_is_past(x), str(x.get("date", ""))))
         )
         parts.append(
             f'<details class="cat" open><summary class="bh">近期催化日历</summary>'
@@ -626,7 +699,64 @@ def _thesis_html(th: dict) -> str:
     return "".join(parts)
 
 
-def card(a: dict, thesis: dict) -> str:
+def _shareholder_html(a: dict) -> str:
+    """Render recent (180d) shareholder buy/sell changes. CN only — empty if none."""
+    changes = a.get("shareholder_changes") or []
+    if not changes:
+        return ""
+    rows = []
+    n_buy = sum(1 for c in changes if c.get("is_buy"))
+    n_sell = len(changes) - n_buy
+    for c in changes:
+        sh = c.get("shares")
+        sh_s = ""
+        if isinstance(sh, (int, float)) and not pd.isna(sh):
+            sh_abs = abs(sh)
+            sh_s = f"{sh_abs/1e4:.0f}万" if sh_abs >= 1e4 else f"{sh_abs:.0f}"
+        ap = c.get("avg_price")
+        ap_s = f" @¥{ap:.2f}" if isinstance(ap, (int, float)) and pd.notna(ap) else ""
+        sign_cls = "buy" if c.get("is_buy") else "sell"
+        sign_sym = "↑" if c.get("is_buy") else "↓"
+        rows.append(
+            f'<tr><td class="sh-d">{escape(c["date"])}</td>'
+            f'<td class="sh-n">{escape(c["shareholder"])}</td>'
+            f'<td class="sh-c {sign_cls}">{sign_sym} {sh_s}{ap_s}</td></tr>'
+        )
+    summary = f'<span class="sh-buy">{n_buy} 增</span> / <span class="sh-sell">{n_sell} 减</span>'
+    return (
+        f'<details class="shareholders"><summary class="bh">'
+        f'最近 180 天股东变动 <span class="sh-x">({len(changes)} 条 · {summary})</span>'
+        f'</summary><table class="sh-tbl"><tbody>{"".join(rows)}</tbody></table></details>'
+    )
+
+
+def _hold_badge(a: dict, holdings: dict | None) -> str:
+    """Show 🔹 持仓 +N% chip when this symbol is in current holdings."""
+    if not holdings:
+        return ""
+    code = a["symbol"].split(".")[0]
+    h = holdings.get(code)
+    if not h:
+        return ""
+    pnl = h.get("floating_pnl_pct")
+    pnl_s = ""
+    if isinstance(pnl, (int, float)):
+        pnl_pct = pnl * 100
+        cls = "up" if pnl_pct >= 0 else "down"
+        pnl_s = f' <em class="{cls}">{pnl_pct:+.1f}%</em>'
+    return f'<span class="hold-tag" title="持仓中（来自 analysis.json）">🔹 持仓{pnl_s}</span>'
+
+
+def _verdict_label(verdict: str, symbol: str, holdings: dict | None) -> str:
+    """If user already holds this AND dashboard says 建仓, surface '补仓机会'."""
+    if holdings and verdict == "建仓":
+        code = symbol.split(".")[0]
+        if code in holdings:
+            return "补仓机会"
+    return verdict
+
+
+def card(a: dict, thesis: dict, holdings: dict | None = None) -> str:
     order, cls, vexpl = VERDICT_META[a["verdict"]]
     th = thesis.get(a["symbol"], {})
     chg1 = a["chg1"]; chg_cls = "up" if chg1 >= 0 else "down"
@@ -656,20 +786,25 @@ def card(a: dict, thesis: dict) -> str:
         <div class="hr">
           <span class="px">{_num(a['close'])}</span>
           <span class="chg {chg_cls}">{_num(chg1,'{:+.2f}%')}</span>
-          <span class="badge {cls}">{a['verdict']}</span>
+          {_hold_badge(a, holdings)}
+          <span class="badge {cls}">{_verdict_label(a['verdict'], a['symbol'], holdings)}</span>
+          <button class="exp-btn" onclick="toggleCard(this)" title="展开/收起详情">▾</button>
         </div>
       </header>
-      <p class="vexpl">{vexpl}</p>
+      <p class="vexpl">{vexpl} <span class="data-date" title="价格/技术信号数据截止日">· 数据 {a.get('date','—')}</span></p>
       <section class="grid">{fundamentals}</section>
       {_valh(a)}
       {_sotp(a)}
-      <section class="grid sig">{signal}</section>
-      <section class="thesis">{thesis_html}</section>
+      {_shareholder_html(a)}
+      <div class="card-deep">
+        <section class="grid sig">{signal}</section>
+        <section class="thesis">{thesis_html}</section>
+      </div>
     </article>
     """
 
 
-def _panel(market: str, rows: list[dict], active: bool, thesis: dict) -> str:
+def _panel(market: str, rows: list[dict], active: bool, thesis: dict, holdings: dict | None = None) -> str:
     rows = sorted(rows, key=lambda a: (VERDICT_META[a["verdict"]][0], -a["close"]))
     on = " on" if active else ""
     if not rows:
@@ -679,7 +814,7 @@ def _panel(market: str, rows: list[dict], active: bool, thesis: dict) -> str:
     n_buy = sum(1 for a in rows if a["verdict"] == "建仓")
     header = (f'<div class="phead">本市场数据日期 {panel_date} · {len(rows)} 只'
               f' · 可建仓 <b>{n_buy}</b> 只</div>')
-    cards = "\n".join(card(a, thesis) for a in rows)
+    cards = "\n".join(card(a, thesis, holdings) for a in rows)
     return (f'<section class="panel{on}" data-m="{market}">{header}'
             f'<div class="wrap">{cards}</div></section>')
 
@@ -704,7 +839,8 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
         )
     tabs = "".join(tab_parts)
     thesis = cfg.get("thesis", {})
-    panels = "".join(_panel(m, by_market.get(m, []), m == active_market, thesis) for m, _ in market_tabs)
+    holdings = cfg.get("_holdings")
+    panels = "".join(_panel(m, by_market.get(m, []), m == active_market, thesis, holdings) for m, _ in market_tabs)
     return f"""<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -752,6 +888,8 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
   .badge.buy {{ background:var(--buy); }} .badge.wait {{ background:var(--wait); }}
   .badge.watch {{ background:var(--watch); }} .badge.avoid {{ background:var(--avoid); }}
   .vexpl {{ color:var(--dim); font-size:12px; margin:7px 0 11px; }}
+  .data-date {{ color:#5a6273; font-size:11px; font-variant-numeric:tabular-nums;
+                cursor:help; margin-left:4px; }}
   .grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:7px 14px; margin-bottom:10px; }}
   .grid.sig {{ grid-template-columns:repeat(4,1fr); padding-top:10px; border-top:1px dashed var(--line); }}
   .m {{ display:flex; flex-direction:column; }}
@@ -786,6 +924,39 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
   .vh-meta .rb-hi {{ color:var(--up); }}
   .impl-tag {{ display:inline-block; font-size:9px; padding:1px 4px; border-radius:3px;
                background:var(--wait); color:#fff; vertical-align:middle; margin-left:3px; }}
+  .hold-tag {{ display:inline-flex; align-items:center; font-size:11px;
+               padding:1px 7px; border-radius:10px; background:rgba(31,157,87,0.15);
+               border:1px solid var(--buy); color:#7be1a8; font-weight:500;
+               white-space:nowrap; }}
+  .hold-tag em {{ font-style:normal; margin-left:4px; font-variant-numeric:tabular-nums; }}
+  .hold-tag em.up {{ color:#e5534b; }} .hold-tag em.down {{ color:#7be1a8; }}
+  /* shareholder changes (CN only) */
+  .shareholders {{ margin:9px 0 2px; border-top:1px dashed var(--line); padding-top:9px; }}
+  .shareholders summary {{ cursor:pointer; list-style:none; }}
+  .shareholders summary::-webkit-details-marker {{ display:none; }}
+  .shareholders summary::before {{ content:"▸ "; color:var(--dim); font-size:10px; }}
+  .shareholders[open] summary::before {{ content:"▾ "; }}
+  .sh-x {{ color:var(--dim); font-weight:400; font-size:10.5px; margin-left:4px; }}
+  .sh-buy {{ color:#e5534b; }} .sh-sell {{ color:#7be1a8; }}
+  .sh-tbl {{ width:100%; margin-top:5px; font-size:11.5px; border-collapse:collapse;
+             font-variant-numeric:tabular-nums; }}
+  .sh-tbl td {{ padding:2px 4px; color:#c8cdd6; }}
+  .sh-tbl .sh-d {{ color:var(--dim); width:80px; }}
+  .sh-tbl .sh-n {{ }}
+  .sh-tbl .sh-c {{ text-align:right; font-weight:500; }}
+  .sh-tbl .sh-c.buy {{ color:#e5534b; }} .sh-tbl .sh-c.sell {{ color:#7be1a8; }}
+  /* collapsible card: default collapse signal+thesis; click ▾ to expand */
+  .card-deep {{ display:none; }}
+  .card.open .card-deep {{ display:block; }}
+  .exp-btn {{ appearance:none; cursor:pointer; background:transparent; color:var(--dim);
+              border:1px solid var(--line); border-radius:5px; font-size:11px;
+              padding:1px 6px; margin-left:6px; transition:transform .15s; }}
+  .exp-btn:hover {{ color:var(--txt); border-color:#3a4150; }}
+  .card.open .exp-btn {{ transform:rotate(180deg); color:var(--txt); }}
+  .exp-all {{ font-size:11px; color:var(--dim); cursor:pointer; margin-left:8px;
+              padding:2px 8px; border:1px solid var(--line); border-radius:5px;
+              background:transparent; user-select:none; }}
+  .exp-all:hover {{ color:var(--txt); }}
   .sotp {{ border-top:1px dashed var(--line); padding-top:9px; margin-bottom:10px; }}
   .sh {{ font-size:12px; font-weight:600; margin-bottom:5px; }}
   .sh-x {{ color:var(--dim); font-weight:400; font-size:10.5px; margin-left:4px; }}
@@ -818,6 +989,8 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
   .cat li {{ margin-bottom:3px; }}
   .cat li b {{ color:var(--watch); font-weight:600; }}
   .cat .dim {{ color:var(--dim); }}
+  .cat li.past {{ opacity:.5; }}
+  .cat li.past b {{ color:var(--dim); text-decoration:line-through; }}
   .eg {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:6px; }}
   .ec b {{ display:block; font-size:11.5px; color:var(--wait); margin-bottom:4px; }}
   .ec ul {{ margin:0; padding-left:16px; font-size:11.5px; line-height:1.55; color:#c8cdd6; }}
@@ -846,7 +1019,7 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
     <h1>自选监控 · 基本面 &amp; 信号</h1>
     <div class="sub">生成于 {ts} · 共 {total} 只 · 全市场可建仓 <b>{n_buy}</b> 只
       &nbsp;|&nbsp; 入场规则：突破未越追高线=建仓，缩量阴跌=不碰</div>
-    <div class="tabs">{tabs}</div>
+    <div class="tabs">{tabs}<button class="exp-all" onclick="toggleAllCards()">展开全部 ▾</button></div>
   </div>
   <main>{panels}</main>
   <footer>说明：PE/PB/股息率/市值等为数据源(Longbridge)实时取数；触发/阶段/止损为生产 radar 逻辑计算；
@@ -855,6 +1028,16 @@ def render(by_market: dict[str, list[dict]], cfg: dict) -> str:
   function showTab(m){{
     document.querySelectorAll('.tab').forEach(function(t){{ t.classList.toggle('on', t.dataset.m===m); }});
     document.querySelectorAll('.panel').forEach(function(p){{ p.classList.toggle('on', p.dataset.m===m); }});
+  }}
+  function toggleCard(btn){{
+    btn.closest('.card').classList.toggle('open');
+  }}
+  function toggleAllCards(){{
+    var cards = document.querySelectorAll('.panel.on .card');
+    var anyClosed = Array.from(cards).some(function(c){{ return !c.classList.contains('open'); }});
+    cards.forEach(function(c){{ c.classList.toggle('open', anyClosed); }});
+    var btn = document.querySelector('.exp-all');
+    if (btn) btn.textContent = anyClosed ? '收起全部 ▴' : '展开全部 ▾';
   }}
   </script>
 </body></html>"""
@@ -868,6 +1051,7 @@ def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     OUT.parent.mkdir(parents=True, exist_ok=True)
     cfg = load_config()
+    cfg["_holdings"] = load_holdings()
     by_market: dict[str, list[dict]] = {}
     for market, label in cfg.get("market_tabs", []):
         basket = cfg.get("baskets", {}).get(market, [])
