@@ -200,6 +200,18 @@
         {"match": ["海外"], "label": "海外(Kwai)", "ps": 2.0, "reason": "巴西+墨西哥+东南亚成长期权，按高增长亏损股给"}
       ]
     },
+    "0992.HK": {
+      "_calibration_note": "营收×PS。股价2个月翻3倍、PE~20处自身贵端；SOTP+48%几乎全靠SSG(占目标值42%/营收12%)重估，留意'分部加总值钱但市场不买单'的价值陷阱。",
+      "segment_currency": "USD",
+      "segments": [
+        {"match": ["智能设备"], "label": "智能设备集团 IDG(PC+手机)", "ps": 0.4, "reason": "净利率~5%×PE8 — PC全球第一但商品化、低增长现金牛，给0.4×"},
+        {"match": ["基础设施", "ISG"], "label": "基础设施方案集团 ISG(服务器)", "ps": 0.55, "reason": "营收+32%、AI服务器弹性，但毛利薄、盈利刚转正，给0.55×"},
+        {"match": ["解决方案和服务", "SSG"], "label": "方案服务集团 SSG", "ps": 2.5, "reason": "营业利润率~21%、recurring高质量收入，IT服务可比给2.5×"}
+      ],
+      "extra": [
+        {"label": "净债务(FY26末)", "value_yi": -1.4, "reason": "净债务仅~$0.14B(10.7亿HKD)≈中性，股权≈企业价值"}
+      ]
+    },
     "META.US": {
       "_calibration_note": "App PS bumped to reflect AI广告ROI溢价。RL stays PS=0 per user decision.",
       "segment_currency": "USD",
