@@ -43,10 +43,16 @@ OUT = ROOT / "outputs" / "watchlist_dashboard.html"
 CONFIG_PATH = ROOT / "research_inputs" / "dashboard_config.json"
 K_ATR = 1.0          # 不追高: extended if close > 20d-high + K_ATR*ATR
 LOOKBACK_YEARS = 4   # Longbridge daily k-line cap ≈ 1000 bars ≈ 4 yrs
+# 超买闸: 价格远离中枢 (距 MA200) 或动能极端时强制降级，无论 trigger 为何。
+# 阈值经全 basket 校准 (2026-06): 正常标的 vs_ma200 最高 ~+25%，故 +50% 零误伤；
+# RSI 正常最高 ~77，故 85 仅捕捉极端拉伸（如 0992.HK 翻 3 倍时 +146%/RSI95）。
+OVERBOUGHT_VS_MA200 = 50.0   # close 高于 MA200 的百分比阈值
+OVERBOUGHT_RSI = 85.0        # RSI14 极端动能兜底
 
 VERDICT_META = {  # label -> (sort order, css class, 中文释义)
     "建仓":       (0, "buy",   "突破达标且未越追高线，右侧确认机会"),
     "等回踩":     (1, "wait",  "已突破但冲高过头，挂回踩单别追"),
+    "超买-勿追":  (1, "wait",  "价格远离中枢(距MA200过远)或RSI极端，追高风险大，等回踩"),
     "观察":       (2, "watch", "接近突破、结构健康，等放量触发"),
     "回踩-谨慎":  (2, "watch", "回踩信号，历史上偏弱，谨慎"),
     "不碰":       (3, "avoid", "下降趋势无信号，接飞刀区"),
@@ -258,9 +264,18 @@ def build_sotp(
 
 def compute_verdict(
     close: float, ma20: float, ma200: float, h20: float, atr: float,
-    trigger: str | None,
+    trigger: str | None, rsi: float | None = None,
 ) -> tuple[str, float]:
-    """Return (verdict_label, stop_price). Centralised so test can pin it."""
+    """Return (verdict_label, stop_price). Centralised so test can pin it.
+
+    超买闸优先于所有 trigger：价格离中枢过远 (距 MA200 ≥ OVERBOUGHT_VS_MA200)
+    或 RSI 极端 (≥ OVERBOUGHT_RSI) 时，无论是否有突破/回踩信号都降级为「超买-勿追」，
+    避免暴涨标的（如翻数倍后仍站上 ma20）被误判为可介入的「观察/建仓」。
+    """
+    if ma200 and (close / ma200 - 1) * 100 >= OVERBOUGHT_VS_MA200:
+        return "超买-勿追", ma20
+    if rsi is not None and rsi >= OVERBOUGHT_RSI:
+        return "超买-勿追", ma20
     cap = h20 + K_ATR * atr
     if trigger == "breakout":
         return ("建仓" if close <= cap else "等回踩"), h20
@@ -292,7 +307,7 @@ def analyze(symbol: str, market: str, cfg: dict) -> dict:
     dist_high = (c / h20 - 1) * 100 if h20 else float("nan")
     cap = h20 + K_ATR * atr
 
-    verdict, stop = compute_verdict(c, ma20, ma200, h20, atr, trig)
+    verdict, stop = compute_verdict(c, ma20, ma200, h20, atr, trig, rsi)
     risk_pct = (c - stop) / c * 100 if stop and c > stop else None
 
     fund = _safe(f"fundamentals[{symbol}]", lambda: prov.fetch_fundamentals(symbol), {}) or {}

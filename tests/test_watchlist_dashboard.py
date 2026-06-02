@@ -23,7 +23,7 @@ from watchlist_dashboard import (  # noqa: E402
 
 
 class TestVerdict(unittest.TestCase):
-    """Pin the 5 verdict branches so changes to compute_verdict are intentional."""
+    """Pin the verdict branches so changes to compute_verdict are intentional."""
 
     def test_breakout_within_cap_is_buy(self):
         # close = 100, h20 = 100, atr = 5, cap = 105 → not extended
@@ -54,6 +54,27 @@ class TestVerdict(unittest.TestCase):
         # close 94 vs h20 100 = -6% → too far, even if above ma20
         v, _ = compute_verdict(close=94, ma20=93, ma200=90, h20=100, atr=5, trigger=None)
         self.assertEqual(v, "不碰")
+
+    def test_far_above_ma200_is_overbought(self):
+        # close 200 vs ma200 100 = +100% → 超买闸优先，即便结构本来会判「观察」
+        v, stop = compute_verdict(close=200, ma20=180, ma200=100, h20=200, atr=5, trigger=None)
+        self.assertEqual(v, "超买-勿追")
+        self.assertEqual(stop, 180)
+
+    def test_overbought_gate_overrides_breakout(self):
+        # 远离 MA200 的突破也不该「建仓」——超买闸先行
+        v, _ = compute_verdict(close=160, ma20=150, ma200=100, h20=160, atr=5, trigger="breakout")
+        self.assertEqual(v, "超买-勿追")
+
+    def test_extreme_rsi_is_overbought(self):
+        # vs_ma200 仅 +10%（不触发距离闸），但 RSI 90 ≥ 85 → 超买
+        v, _ = compute_verdict(close=110, ma20=100, ma200=100, h20=110, atr=5, trigger=None, rsi=90)
+        self.assertEqual(v, "超买-勿追")
+
+    def test_below_overbought_thresholds_unaffected(self):
+        # 回归保护：vs_ma200 +6.7% 且 RSI 75 都在阈值内 → 维持原「观察」
+        v, _ = compute_verdict(close=96, ma20=95, ma200=90, h20=100, atr=5, trigger=None, rsi=75)
+        self.assertEqual(v, "观察")
 
 
 class TestSegmentMatching(unittest.TestCase):
