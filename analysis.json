@@ -1,39 +1,15 @@
 {
-  "today": "2026-06-04",
+  "today": "2026-06-05",
   "holdings": [
     {
       "code": "002602",
       "name": "世纪华通",
-      "last_date": "2026-05-13",
-      "today_action": "持有观察",
-      "today_priority": 4,
-      "today_note": "结构中性，等待方向",
-      "yesterday_action": "持有观察",
-      "yesterday_note": "结构中性，等待方向",
-      "last_close": 15.06999969482422,
-      "floating_pnl_pct": 0.019621088959690218,
-      "trigger": "",
-      "verdict": "REJECT",
-      "stop_price": 13.5976,
-      "tp1": 15.962399999999999,
-      "tp2": 17.144799999999996
+      "error": "history too short (0 rows)"
     },
     {
       "code": "002241",
       "name": "歌尔股份",
-      "last_date": "2026-05-13",
-      "today_action": "清仓",
-      "today_priority": 1,
-      "today_note": "已跌破止损线 28.02",
-      "yesterday_action": "清仓",
-      "yesterday_note": "已跌破止损线 28.00",
-      "last_close": 26.13999938964844,
-      "floating_pnl_pct": -0.12104911265472626,
-      "trigger": "breakout",
-      "verdict": "ACCEPT",
-      "stop_price": 28.020363521575927,
-      "tp1": 31.45963647842407,
-      "tp2": 33.17927295684814
+      "error": "history too short (0 rows)"
     }
   ]
 }
